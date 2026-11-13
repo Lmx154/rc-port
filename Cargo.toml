@@ -1,0 +1,32 @@
+[package]
+name = "rc-port"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "The UART of an ExpressLRS receiver on a flight controller, following the receiver between CRSF at 420000 baud and MAVLink 2 at 460800 baud: a sans-IO core and an async loop over embedded-io-async."
+readme = "README.md"
+keywords = ["embedded", "no-std", "crsf", "mavlink", "expresslrs"]
+categories = ["embedded", "no-std"]
+rust-version = "1.99"
+
+[features]
+# SetBaud and TxBusy for the unsplit embassy-rp 0.10 BufferedUart. The chip feature (rp235xa/rp235xb) comes from the application.
+embassy-rp-0-10 = ["dep:embassy-rp"]
+
+[dependencies]
+# No remote: a path dependency (see README, "Works with").
+crsf-codec = { path = "../crsf-codec" }
+# The accept list is on branch `wip-accept-list` (92ea23d), which is not on GitHub yet: a path dependency
+# until it is, then a git dependency pinned to that commit like marv-dialect below.
+mavlink-device = { path = "../mavlink-device" }
+# The same source and commit as mavlink-device's own dependency, so that both use one copy.
+marv-dialect = { git = "https://github.com/Lmx154/marv-dialect.git", rev = "61915e658105a5bb88ff239c560cd923f66a56f7" }
+embedded-io-async = "0.7"
+embedded-hal-async = "1.0"
+embassy-rp = { version = "0.10.0", default-features = false, optional = true }
+
+[workspace]
+
+[dev-dependencies]
+proptest = "1.12"
