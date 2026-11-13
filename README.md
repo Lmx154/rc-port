@@ -188,7 +188,7 @@ Lints and builds: `cargo clippy --all-targets -- -D warnings` on the host; the b
 
 ## Bench program (`hil/`)
 
-`hil/` is a separate crate (its own workspace) of on-board programs. `rc_capture` is the first board step (decision R2a): a listen-only capture of the receiver's line on GPIO17 by two listeners at once (UART0 at the CRSF rate, a `pio-uart` receiver on PIO1 at 460800), which does not use this crate. Status: **built only, never run**. Wiring, the command (`tools/run.sh rc_capture 600`), the sequences to perform and how to read the log: `hil/README.md`.
+`hil/` is a separate crate (its own workspace) of on-board programs. `rc_capture` is the first board step (decision R2a): a listen-only capture of the receiver's line on GPIO17 by two listeners at once (UART0 at the CRSF rate, a `pio-uart` receiver on PIO1 at 460800), which does not use this crate. Status: **built only, never run**. Wiring, the command (`tools/run.sh rc_capture 600`), the sequences to perform and how to read the log: `hil/README.md`. `rc_follow` runs this crate's `RcPort::run` on UART0 (feature `embassy-rp-0-10`, GPIO14 TX driven, GPIO17 RX with its pull-up on) and logs modes, reports and counters for R2 to R5; it transmits only a fixed CRSF battery frame and the MAVLink node's own messages. Status: **built only, never run**; `tools/run.sh rc_follow 600`, details in `hil/README.md`.
 
 ## Cargo features
 

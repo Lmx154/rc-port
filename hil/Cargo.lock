@@ -1182,6 +1182,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 
 [[package]]
+name = "rc-port"
+version = "0.1.0"
+dependencies = [
+ "crsf-codec",
+ "embassy-rp",
+ "embedded-hal-async",
+ "embedded-io-async 0.7.0",
+ "marv-dialect",
+ "mavlink-device",
+]
+
+[[package]]
 name = "rc-port-hil"
 version = "0.1.0"
 dependencies = [
@@ -1199,6 +1211,7 @@ dependencies = [
  "mavlink-device",
  "panic-probe",
  "pio-uart",
+ "rc-port",
  "semihosting",
  "static_cell",
 ]

@@ -11,6 +11,8 @@ name = "hil_common"
 
 [dependencies]
 # rc_capture decodes only to count, and does not use rc-port: it must not depend on what it measures.
+# rc_follow runs rc-port itself, on the unsplit embassy-rp 0.10 BufferedUart.
+rc-port = { path = "..", features = ["embassy-rp-0-10"] }
 crsf-codec = { path = "../../crsf-codec" }
 mavlink-device = { path = "../../mavlink-device" }
 # The same source and commit as mavlink-device's own dependency, so that both use one copy.
