@@ -1,6 +1,6 @@
 # rc-port bench programs (`hil/`)
 
-Status: **BUILT ONLY, never run.** `rc_capture` compiles for the RP2350 (`cargo build --release --bin rc_capture` in this folder); it has not been flashed, and nothing below has been observed. A README claims only what ran; when it runs, name the log here.
+Status: `rc_capture` has RUN on the board twice (2026-11-13, logs `rc_capture-20261113-101707.log` and `-102410.log`, kept locally under `logs/`): both listeners worked on the shared pin, with no overrun reported. What it showed is recorded in the project's notes, not here. A README claims only what ran; when it runs, name the log here.
 
 ## `rc_capture`: listen-only capture of the receiver's line (decision R2a)
 

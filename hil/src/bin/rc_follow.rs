@@ -579,7 +579,7 @@ async fn main(_spawner: Spawner) {
     let ctrl = pac::IO_BANK0.gpio(RX_GPIO).ctrl().read();
     let tx_ctrl = pac::IO_BANK0.gpio(TX_GPIO).ctrl().read();
     info!(
-        "[INFO] rc_follow: GPIO17 after setup: funcsel {=u8} (2 = UART0), pull-down {=bool}, pull-up {=bool}, input enabled {=bool}, isolated {=bool}, level {=u32}; GPIO14 funcsel {=u8} (2 = UART0)",
+        "[INFO] rc_follow: GPIO17 after setup: funcsel {=u8} (2 = UART0), pull-down {=bool}, pull-up {=bool}, input enabled {=bool}, isolated {=bool}, level {=u32}; GPIO14 funcsel {=u8} (11 = UART0 TX on this pin)",
         ctrl.funcsel(),
         pad.pde(),
         pad.pue(),
