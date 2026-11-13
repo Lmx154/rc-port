@@ -17,8 +17,9 @@ embassy-rp-0-10 = ["dep:embassy-rp"]
 [dependencies]
 # No remote: a path dependency (see README, "Works with").
 crsf-codec = { path = "../crsf-codec" }
-# The accept list is on branch `wip-accept-list` (92ea23d), which is not on GitHub yet: a path dependency
-# until it is, then a git dependency pinned to that commit like marv-dialect below.
+# On GitHub (mavlink-device-rs main, 09dfd17: the accept list with `iter`). Kept as a path dependency while
+# crsf-codec has no remote, so that both siblings are taken the same way; then a git dependency pinned to a
+# commit like marv-dialect below.
 mavlink-device = { path = "../mavlink-device" }
 # The same source and commit as mavlink-device's own dependency, so that both use one copy.
 marv-dialect = { git = "https://github.com/Lmx154/marv-dialect.git", rev = "61915e658105a5bb88ff239c560cd923f66a56f7" }

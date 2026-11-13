@@ -12,7 +12,7 @@ The crate is `no_std`, `forbid(unsafe_code)`, with no allocation, no `static` an
 - embassy-rp 0.10, RP2350, the unsplit `embassy_rp::uart::BufferedUart`, with the feature `embassy-rp-0-10` (the chip feature, for example `embassy-rp/rp235xb`, comes from the application). It only builds tonight; it has never run.
 - The sans-IO core on its own, with any I/O.
 
-Dependencies: `crsf-codec` is a **path dependency** (`../crsf-codec`: it has no remote yet). `mavlink-device` is on GitHub (main at 92ea23d, the accept list; 09dfd17, `AcceptList::iter` and `contains`, which this crate uses, is on branch `wip-accept-list` and is to follow) but stays a **path dependency** (`../mavlink-device`), because `crsf-codec` has no remote: the crate cannot be built from git alone either way. `marv-dialect` is a git dependency pinned to the same commit as `mavlink-device`'s own (`61915e6`), so that both use one copy. Both crates are re-exported (`rc_port::crsf_codec`, `rc_port::mavlink_device`) so that the application uses the same versions.
+Dependencies: `crsf-codec` is a **path dependency** (`../crsf-codec`: it has no remote yet). `mavlink-device` is on GitHub (main at 09dfd17: the accept list with `AcceptList::iter` and `contains`, which this crate uses) but stays a **path dependency** (`../mavlink-device`), because `crsf-codec` has no remote: the crate cannot be built from git alone either way. `marv-dialect` is a git dependency pinned to the same commit as `mavlink-device`'s own (`61915e6`), so that both use one copy. Both crates are re-exported (`rc_port::crsf_codec`, `rc_port::mavlink_device`) so that the application uses the same versions.
 
 ## States and numbers
 
