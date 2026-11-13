@@ -1,0 +1,11 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-rs run --chip RP235x"
+
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[env]
+# embassy-rp logs one defmt warning per UART error from inside its interrupt handler. rc_capture's
+# CRSF listener hears MAVLink at the wrong baud as framing errors, thousands a second: kept at error so
+# that those warnings cannot fill the RTT buffer (blocking mode under probe-rs) and stall the listeners.
+DEFMT_LOG = "info,embassy_rp=error"

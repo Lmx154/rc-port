@@ -28,6 +28,7 @@ embedded-hal-async = "1.0"
 embassy-rp = { version = "0.10.0", default-features = false, optional = true }
 
 [workspace]
+exclude = ["hil"]
 
 [dev-dependencies]
 proptest = "1.12"

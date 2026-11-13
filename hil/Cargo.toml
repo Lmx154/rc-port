@@ -1,0 +1,37 @@
+[package]
+name = "rc-port-hil"
+description = "On-target bench programs for the rc-port work. rc_capture listens to the receiver's line; run with tools/run.sh rc_capture 600."
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[lib]
+name = "hil_common"
+
+[dependencies]
+# rc_capture decodes only to count, and does not use rc-port: it must not depend on what it measures.
+crsf-codec = { path = "../../crsf-codec" }
+mavlink-device = { path = "../../mavlink-device" }
+# The same source and commit as mavlink-device's own dependency, so that both use one copy.
+marv-dialect = { git = "https://github.com/Lmx154/marv-dialect.git", rev = "61915e658105a5bb88ff239c560cd923f66a56f7" }
+pio-uart = { path = "../../pio-uart", features = ["defmt", "embassy-rp-0-10"] }
+
+embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
+embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-rp = { version = "0.10.0", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xb", "binary-info"] }
+
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+cortex-m = { version = "0.7", features = ["inline-asm"] }
+cortex-m-rt = "0.7"
+critical-section = "1.1"
+embedded-io-async = "0.7"
+static_cell = "2.1.1"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+semihosting = "0.1"
+
+[profile.release]
+debug = true
+
+[workspace]

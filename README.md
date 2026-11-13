@@ -186,6 +186,10 @@ Mutations of the core and of `run` were checked to fail the tests meant to catch
 
 Lints and builds: `cargo clippy --all-targets -- -D warnings` on the host; the back-end only for the target: `cargo clippy --lib --target thumbv8m.main-none-eabihf --features embassy-rp-0-10,embassy-rp/rp235xb -- -D warnings` and the same with `cargo build`. (`--all-features` on the host cannot build embassy-rp, which needs a chip feature and the ARM target.)
 
+## Bench program (`hil/`)
+
+`hil/` is a separate crate (its own workspace) of on-board programs. `rc_capture` is the first board step (decision R2a): a listen-only capture of the receiver's line on GPIO17 by two listeners at once (UART0 at the CRSF rate, a `pio-uart` receiver on PIO1 at 460800), which does not use this crate. Status: **built only, never run**. Wiring, the command (`tools/run.sh rc_capture 600`), the sequences to perform and how to read the log: `hil/README.md`.
+
 ## Cargo features
 
 All off by default: `embassy-rp-0-10` (`SetBaud` and `TxBusy` for `embassy_rp::uart::BufferedUart`, `From<embassy_rp::uart::Error>` for `UartError`; the chip feature comes from the application).
@@ -202,6 +206,8 @@ src/embassy.rs    feature embassy-rp-0-10
 src/sim.rs        test-only: the wire, the resampling UART, the transmitter, the driver
 src/tests.rs      host tests of the core
 src/run_tests.rs  host tests of run
+hil/              on-board programs, own workspace (see hil/README.md)
+tools/run.sh      builds, flashes and runs one hil/ program under the machine-wide probe lock
 ```
 
 MIT, see `LICENSE`.
