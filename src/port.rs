@@ -5,9 +5,9 @@ use crate::report::{CrsfLinkReport, RadioStatus, RadioStatusReport, Report, Sour
 use crsf_codec::{Deframer, Frame, MAX_FRAME_LEN, raw_to_us};
 use marv_dialect::MessageData;
 use mavlink_device::dialect::{RADIO_STATUS_DATA, RC_CHANNELS_OVERRIDE_DATA};
-use mavlink_device::{FRAME_BUF, Incoming, Node, ParamStore, StreamSlot, Telemetry};
+use mavlink_device::{FRAME_BUF, Incoming, MAX_ACCEPT, Node, ParamStore, StreamSlot, Telemetry};
 
-/// The accept list the port gives its node: the two messages it reports.
+/// The port's own entries of its node's accept list: the two messages it reports.
 const ACCEPT: [(u32, u8); 2] = [
     (
         RC_CHANNELS_OVERRIDE_DATA::ID,
@@ -44,6 +44,15 @@ pub enum UartError {
     Other,
 }
 
+/// Why [`RcPort::new`] failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NewError {
+    /// The application's accept list plus the port's RC_CHANNELS_OVERRIDE and RADIO_STATUS (those
+    /// it does not list already) is more than `mavlink_device::MAX_ACCEPT` (16) entries.
+    AcceptListFull,
+}
+
 /// The next thing the caller must do on the UART, from [`RcPort::poll_action`].
 ///
 /// A baud change is always the sequence [`Flush`](Action::Flush), [`WaitTxIdle`](Action::WaitTxIdle),
@@ -78,6 +87,15 @@ pub trait Hooks {
     fn crsf_frame(&mut self, now_us: u64, out: &mut [u8; MAX_FRAME_LEN]) -> Option<usize> {
         let _ = (now_us, out);
         None
+    }
+
+    /// A message of the application's accept list (`mavlink_device::Config::accept`) other than
+    /// RC_CHANNELS_OVERRIDE and RADIO_STATUS, as the node handed it over (checks as for those
+    /// two; not target-filtered or interpreted). Called from inside [`RcPort::receive`] only while
+    /// locked on MAVLink, from the 3rd valid frame of the lock on, once per frame, in stream
+    /// order, exactly like a stick report. It must not block; `msg` borrows the receive buffer.
+    fn mavlink(&mut self, msg: Incoming<'_>) {
+        let _ = msg;
     }
 
     /// The counters, called by [`RcPort::run`] once per wake when they changed (the sans-IO core
@@ -357,6 +375,8 @@ impl Fsm {
                 component_id: m.component_id,
             };
             self.sticks(channels_us, source, m.now_us, hooks);
+        } else if !ACCEPT.iter().any(|(id, _)| *id == m.message_id) {
+            hooks.mavlink(*m);
         }
     }
 
@@ -406,12 +426,35 @@ impl<'a> RcPort<'a> {
     /// A port at power-up: searching, 460800 baud first.
     ///
     /// The node is built from `mav` and `streams` as [`Node::new`] does, with the accept list
-    /// replaced by RC_CHANNELS_OVERRIDE and RADIO_STATUS (the two messages the port reports; no
-    /// other listed message can be received through this port).
-    pub fn new(config: Config, mav: mavlink_device::Config, streams: &'a mut [StreamSlot]) -> Self {
+    /// `mav.accept` (the application's, in its order) followed by RC_CHANNELS_OVERRIDE and
+    /// RADIO_STATUS, the two messages the port reports, where the application does not list them.
+    /// Where it does, the entry stays in its place with the port's CRC_EXTRA for that id. The
+    /// application's other messages are handed to [`Hooks::mavlink`]. More than
+    /// `mavlink_device::MAX_ACCEPT` (16) entries in all: [`NewError::AcceptListFull`], nothing
+    /// dropped.
+    pub fn new(
+        config: Config,
+        mav: mavlink_device::Config,
+        streams: &'a mut [StreamSlot],
+    ) -> Result<Self, NewError> {
         let own_system_id = mav.system_id;
-        let mav = mav.with_accept_list(&ACCEPT).unwrap_or(mav);
-        Self {
+        let own = |id: u32| ACCEPT.iter().copied().find(|p| p.0 == id);
+        let added = ACCEPT.iter().copied().filter(|p| !mav.accept.contains(p.0));
+        let mut pairs = [(0u32, 0u8); MAX_ACCEPT];
+        let mut n = 0;
+        for pair in mav
+            .accept
+            .iter()
+            .map(|p| own(p.0).unwrap_or(p))
+            .chain(added)
+        {
+            *pairs.get_mut(n).ok_or(NewError::AcceptListFull)? = pair;
+            n += 1;
+        }
+        let mav = mav
+            .with_accept_list(pairs.get(..n).unwrap_or(&[]))
+            .map_err(|_| NewError::AcceptListFull)?;
+        Ok(Self {
             fsm: Fsm {
                 config,
                 lock_frames: LOCK_FRAMES,
@@ -430,7 +473,7 @@ impl<'a> RcPort<'a> {
             tx: [0; FRAME_BUF],
             tx_len: 0,
             tx_off: 0,
-        }
+        })
     }
 
     /// Takes bytes read from the UART, in any split. While locked or listening they go to the
@@ -438,12 +481,14 @@ impl<'a> RcPort<'a> {
     /// `receive_with`, so the node also acts on HEARTBEAT, parameter and command frames); during a
     /// baud change they are counted as garbage. Each valid frame counts toward the lock or keeps
     /// it; while locked, each RC, link statistics, RC_CHANNELS_OVERRIDE (target own system or 0)
-    /// and RADIO_STATUS frame becomes one [`Report`].
+    /// and RADIO_STATUS frame becomes one [`Report`], and each other listed MAVLink message one
+    /// [`Hooks::mavlink`] call.
     ///
     /// A valid CRSF frame is any frame the deframer accepts. A valid MAVLink frame is one the
-    /// node hands over through `receive_with`'s hook: RC_CHANNELS_OVERRIDE or RADIO_STATUS,
-    /// MAVLink 2, incompatibility flags 0, checksum right, sender not the node's own system id
-    /// (HEARTBEAT, parameter and command frames do not count).
+    /// node hands over through `receive_with`'s hook: a message of the accept list (the port's
+    /// RC_CHANNELS_OVERRIDE and RADIO_STATUS and the application's own entries), MAVLink 2,
+    /// incompatibility flags 0, checksum right for the listed CRC_EXTRA, sender not the node's own
+    /// system id (HEARTBEAT, parameter and command frames do not count).
     pub fn receive(
         &mut self,
         bytes: &[u8],

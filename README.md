@@ -21,7 +21,7 @@ Three states: **Searching**, **Crsf**, **Mavlink**.
 - Searching: listen at 460800 baud for `D_MAV`, then at the CRSF baud for `D_CRSF`, then 460800 again, and so on. At power-up and after leaving CRSF the search starts at 460800; after leaving MAVLink it starts at the CRSF baud (always "the other baud first"). Valid frames are counted per listening period; the count restarts at each baud change.
 - Lock: `LOCK_FRAMES` valid frames in one listening period. Frames 1 and 2 are counted (`Stats::lock_discarded`) and **not reported**; the 3rd and every later one are.
 - Leave: Crsf after `T_LEAVE_CRSF` without a valid CRSF frame, Mavlink after `T_LEAVE_MAV` without a valid MAVLink frame. Then Searching.
-- A valid CRSF frame is any frame the deframer accepts (address 0xC8, length 2 to 62, CRC-8), of any type. A valid MAVLink frame is one the node hands over through `Node::receive_with`'s hook: RC_CHANNELS_OVERRIDE (70) or RADIO_STATUS (109), MAVLink 2, incompatibility flags 0, checksum right with the CRC_EXTRA, sender not the node's own system id. HEARTBEAT, parameter and command frames do not count (the node gives no per-frame event for them). RADIO_STATUS counts, so MAVLink mode holds with the radio link down, as the receiver keeps sending it.
+- A valid CRSF frame is any frame the deframer accepts (address 0xC8, length 2 to 62, CRC-8), of any type. A valid MAVLink frame is one the node hands over through `Node::receive_with`'s hook: RC_CHANNELS_OVERRIDE (70), RADIO_STATUS (109) or a message of the application's accept list (see "Writes and baud changes"), MAVLink 2, incompatibility flags 0, checksum right with the CRC_EXTRA, sender not the node's own system id. HEARTBEAT, parameter and command frames do not count (the node gives no per-frame event for them). RADIO_STATUS counts, so MAVLink mode holds with the radio link down, as the receiver keeps sending it.
 - `Stats::mode_changes` counts locks whose protocol differs from the previous lock's: Crsf, Searching, Crsf counts 0; the first lock after power-up counts 0.
 
 | Constant | Value | Source | Set from the bench? |
@@ -85,7 +85,8 @@ impl Hooks for Firmware {
 }
 
 let mut slots = [];
-let mut port = RcPort::new(Config::new(), mavlink_device::Config::new(1, 1), &mut slots);
+let mut port = RcPort::new(Config::new(), mavlink_device::Config::new(1, 1), &mut slots)
+    .expect("at most 16 accept list entries");
 let (mut params, mut tel, mut fw) = (NoParams, NoTelemetry, Firmware { sticks: None });
 // After power-up the port sets the UART to 460800 baud: flush, wait for the transmitter, set.
 let mut bauds = Vec::new();
@@ -110,7 +111,7 @@ The async loop (not compiled here: it needs a UART and an executor):
 ```rust,ignore
 // embassy-rp 0.10, feature `embassy-rp-0-10`; UART0, GPIO14 TX, GPIO17 RX.
 let mut uart = BufferedUart::new(p.UART0, p.PIN_14, p.PIN_17, Irqs, tx_buf, rx_buf, uart_config);
-let mut port = RcPort::new(rc_port::Config::new(), mavlink_device::Config::new(1, 1), &mut slots);
+let mut port = RcPort::new(rc_port::Config::new(), mavlink_device::Config::new(1, 1), &mut slots)?;
 let end = port.run(&mut uart, &mut Delay, || Instant::now().as_micros(), &mut params, &mut telemetry, &mut hooks).await;
 // RunError::Write(_) | WriteZero | EndOfStream: call run again; the port kept its state.
 ```
@@ -121,7 +122,7 @@ let end = port.run(&mut uart, &mut Delay, || Instant::now().as_micros(), &mut pa
 
 - Writes only while locked, only in the locked protocol. CRSF: `Hooks::crsf_frame` is asked for one whole frame at most once per `crsf_tx_interval_us`, the first time at the first poll after the lock; the application writes it, for example the battery frame with `crsf_codec::encode_battery`. MAVLink: the node's `poll_transmit` frames (heartbeat, streams, replies). **Nothing is written while searching.** When a lock is left, the unsent rest of a frame is dropped.
 - A baud change is always the action sequence `Flush` (the software buffer is empty), `WaitTxIdle` (the transmitter sent its last stop bit), `SetBaud(baud)`, each acknowledged with `RcPort::done`, with nothing written in between. After `SetBaud` both decoders' buffers are cleared: `Deframer::clear` for CRSF (the bytes it held, the start of a frame cut by the change, are counted in `garbage_bytes`; its other counters carry on) and `Node::on_link_down` for MAVLink (streams back to their defaults, replies and lists dropped, ground station no longer present, slowdown 0; the bytes its receive buffer held are dropped without being counted, as `mavlink-device` does). Bytes already in the UART's receive buffer from the old baud (embassy-rp does not clear it) are fed to the new decoder as garbage; the lock threshold is what keeps them harmless. Bytes received while a baud change is in progress are counted as garbage.
-- The node is built by the port (`RcPort::new(config, mavlink_config, streams)`), with its accept list replaced by RC_CHANNELS_OVERRIDE and RADIO_STATUS: no other listed MAVLink message can be received through this port. While the port listens at 460800 the node acts on HEARTBEAT, parameter and command frames as `mavlink-device` always does (a PARAM_SET calls `ParamStore::set`), but it writes only once locked.
+- The node is built by the port (`RcPort::new(config, mavlink_config, streams)`, which returns a `Result`). Its accept list is the application's (`mavlink_config.accept`, in its order) followed by RC_CHANNELS_OVERRIDE (70) and RADIO_STATUS (109) where the application does not list them; where it does, the entry keeps its place with the port's CRC_EXTRA for that id, whatever the application gave. The node holds at most 16 entries (`mavlink_device::MAX_ACCEPT`): a merged list longer than that is `Err(NewError::AcceptListFull)`, nothing is dropped. The application's other listed messages go to `Hooks::mavlink` (default: nothing), only while locked on MAVLink and from the 3rd valid frame of the lock on, once per frame, exactly like stick reports; before the lock they are counted in `lock_discarded` and not handed over. Each such message is a valid MAVLink frame for the lock and for leaving it, as RC_CHANNELS_OVERRIDE and RADIO_STATUS are. While the port listens at 460800 the node acts on HEARTBEAT, parameter and command frames as `mavlink-device` always does (a PARAM_SET calls `ParamStore::set`), but it writes only once locked.
 - Each call that takes `now_us` first applies the deadline due at that time (leaving a lock, ending a listening period), then its input. `now_us` must be non-decreasing and, for `run`, on the clock of the delay.
 
 ## Lock time, proved on the model

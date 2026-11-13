@@ -645,8 +645,14 @@ fn feed_items(port: &mut RcPort<'_>, items: &[(u64, Rx)], end_us: u64, rec: &mut
     }
 }
 
-/// Runs an I16 case with `lock_frames`; returns every report and the counters.
-fn i16_run(lock_frames: u8, case: &I16Case) -> (Vec<Report>, Stats) {
+/// Runs an I16 case with `lock_frames`; returns every report, the counters and the
+/// `Hooks::mavlink` calls. With `custom`, the application lists [`CUSTOM_ID`] and every planted
+/// MAVLink frame is that message.
+fn i16_run(
+    lock_frames: u8,
+    case: &I16Case,
+    custom: bool,
+) -> (Vec<Report>, Stats, Vec<(u32, u32, u64)>) {
     let mut scen = Scen::default();
     let end = if case.listen_mav {
         scen.crsf_stream(MS, (1 + case.dur_ms) * MS, 4_000, &CRSF_RAW)
@@ -667,7 +673,9 @@ fn i16_run(lock_frames: u8, case: &I16Case) -> (Vec<Report>, Stats) {
         }
     };
     let mav_planted = |stick: bool| {
-        if stick {
+        if custom {
+            mav(ELRS_SYS, ELRS_COMP, 9, &Custom::<CUSTOM_ID>(0xC0FFEE))
+        } else if stick {
             mav(ELRS_SYS, ELRS_COMP, 9, &overrides(OWN_SYS, &PLANTED_CH))
         } else {
             mav(ELRS_SYS, ELRS_COMP, 9, &radio_status(1, 100))
@@ -706,15 +714,20 @@ fn i16_run(lock_frames: u8, case: &I16Case) -> (Vec<Report>, Stats) {
         Config::new().with_d_mav_us(1).with_d_crsf_us(10_000_000)
     };
     let mut slots = slots();
-    let mut port = RcPort::new(config, mavlink_device::Config::new(OWN_SYS, 1), &mut slots);
+    let mav_config = if custom {
+        custom_listed()
+    } else {
+        mavlink_device::Config::new(OWN_SYS, 1)
+    };
+    let mut port = RcPort::new(config, mav_config, &mut slots).unwrap();
     port.set_lock_frames(lock_frames);
     let mut rec = Rec::default();
     feed_items(&mut port, &items, end / US + 50_000, &mut rec);
-    (rec.reports, port.stats())
+    (rec.reports, port.stats(), rec.mavlink)
 }
 
 fn i16_check(lock_frames: u8, case: &I16Case) -> Result<(), TestCaseError> {
-    let (reports, stats) = i16_run(lock_frames, case);
+    let (reports, stats, _) = i16_run(lock_frames, case, false);
     prop_assert!(
         reports.is_empty(),
         "reports from planted frames: {:?}",
@@ -742,6 +755,22 @@ proptest! {
     }
 }
 
+proptest! {
+    #![proptest_config(PtConfig { cases: 128, failure_persistence: None, ..PtConfig::default() })]
+
+    /// The application's listed message ([`CUSTOM_ID`]) planted in wrong-baud garbage as I16
+    /// plants frames (every planted MAVLink frame is that message): never handed to
+    /// `Hooks::mavlink`, no report, no lock.
+    #[test]
+    fn listed_mavlink_message_never_handed_over_from_wrong_baud_garbage(case in i16_case()) {
+        let (reports, stats, handed) = i16_run(LOCK_FRAMES, &case, true);
+        prop_assert!(handed.is_empty(), "handed over: {:?}", handed);
+        prop_assert!(reports.is_empty(), "reports: {:?}", reports);
+        prop_assert_eq!(stats.mode, Mode::Searching);
+        prop_assert!(stats.uart_framing > 0, "the traffic was not garbage at this baud");
+    }
+}
+
 /// I16's negative control: the same check, run with LOCK_FRAMES = 1, fails.
 #[test]
 fn i16_negative_control_fails_with_lock_frames_1() {
@@ -759,7 +788,7 @@ fn i16_negative_control_fails_with_lock_frames_1() {
         same: vec![(400, true)],
         other: vec![],
     };
-    let (reports, _) = i16_run(1, &case);
+    let (reports, _, _) = i16_run(1, &case, false);
     assert!(reports.iter().any(|r| matches!(r, Report::Sticks(s)
     if s.channels_us == {
         let mut v = [0u16; 16];
@@ -1263,7 +1292,8 @@ fn uart_error_burst_counted_no_report_no_mode_change_before_t_leave() {
         Config::new(),
         mavlink_device::Config::new(OWN_SYS, 1),
         &mut slots,
-    );
+    )
+    .unwrap();
     let mut rec = Rec::default();
     let mut tel = Tel;
     let mut actions = |port: &mut RcPort<'_>, rec: &mut Rec, now: u64| {
@@ -1368,7 +1398,7 @@ fn port_listening<'a>(
     } else {
         Config::new()
     };
-    let mut port = RcPort::new(config, mavlink_device::Config::new(OWN_SYS, 1), slots);
+    let mut port = RcPort::new(config, mavlink_device::Config::new(OWN_SYS, 1), slots).unwrap();
     assert_eq!(settle(&mut port, 0, rec), Some(MAVLINK_BAUD));
     if !crsf {
         return (port, 0);
@@ -1593,4 +1623,130 @@ fn unsent_rest_of_a_frame_dropped_when_the_lock_is_left() {
             }
         });
     }
+}
+
+/// `Hooks::mavlink`: the application's listed message ([`CUSTOM_ID`], the only MAVLink traffic
+/// with an unlisted id between its frames) is handed over once per frame, in order, while locked
+/// on MAVLink and from the 3rd valid frame of the lock on: frames 1 and 2 are lock-on frames. It
+/// alone makes and keeps the lock: the lock is left T_LEAVE_MAV after the last one. The unlisted
+/// id never is handed over, nor the listed message sent at the CRSF baud while locked on CRSF.
+#[test]
+fn listed_mavlink_message_handed_over_only_while_locked() {
+    let mut scen = Scen::default();
+    let mut ends = Vec::new();
+    let mut t = MS;
+    for k in 1..=30u32 {
+        let listed = mav(ELRS_SYS, ELRS_COMP, k as u8, &Custom::<CUSTOM_ID>(k));
+        ends.push(scen.garbage(t, MAVLINK_BAUD, &listed));
+        let unlisted = mav(
+            ELRS_SYS,
+            ELRS_COMP,
+            k as u8,
+            &Custom::<UNLISTED_ID>(1_000 + k),
+        );
+        scen.garbage(t + 5 * MS, MAVLINK_BAUD, &unlisted);
+        t += 10 * MS;
+    }
+    let crsf_from = ends[29] + 300 * MS;
+    let mut t = crsf_from;
+    let mut k = 2_000u32;
+    while t < crsf_from + 600 * MS {
+        scen.crsf_rc(t, &CRSF_RAW);
+        let listed = mav(ELRS_SYS, ELRS_COMP, 0, &Custom::<CUSTOM_ID>(k));
+        scen.garbage(t + 2 * MS, CRSF_BAUD, &listed);
+        k += 1;
+        t += 4 * MS;
+    }
+    let mut sl = slots();
+    let mut sim = Sim::with_mav(Config::new(), custom_listed(), &mut sl);
+    sim.wire = scen.wire;
+    sim.run_until(t / US + 10_000);
+
+    let handed = &sim.hooks.mavlink;
+    let markers: Vec<u32> = handed.iter().map(|h| h.1).collect();
+    assert_eq!(markers, (3..=30).collect::<Vec<u32>>(), "{handed:?}");
+    for &(id, marker, at_us) in handed {
+        assert_eq!(id, CUSTOM_ID);
+        assert!(
+            at_us * US + US >= ends[marker as usize - 1],
+            "handed over before its end"
+        );
+    }
+    let last_us = handed.last().unwrap().2;
+    let lock_us = handed[0].2;
+    let crsf_modes: Vec<Mode> = sim.modes.iter().map(|m| m.1).collect();
+    assert_eq!(
+        crsf_modes,
+        [Mode::Searching, Mode::Mavlink, Mode::Searching, Mode::Crsf]
+    );
+    assert_eq!(sim.modes[1].0, lock_us, "locked by the 3rd listed message");
+    assert_eq!(
+        sim.modes[2].0,
+        last_us + u64::from(T_LEAVE_MAV_US),
+        "the lock was kept by the listed messages"
+    );
+    let s = sim.port.stats();
+    assert_eq!((s.lock_discarded, s.radio_status), (4, 0));
+    assert!(s.sticks > 100, "the CRSF lock reported its sticks");
+    assert!(sim.port.node().stats().dropped_unknown_message >= 30);
+
+    // The garbage check above can fail: with LOCK_FRAMES = 1 a planted listed message is handed
+    // over.
+    let case = I16Case {
+        listen_mav: true,
+        dur_ms: 100,
+        same: vec![(400, false)],
+        other: vec![],
+    };
+    assert!(!i16_run(1, &case, true).2.is_empty());
+}
+
+/// The merged accept list holds the application's entries and the port's two where not listed,
+/// 16 at most: more is `NewError::AcceptListFull`, nothing dropped.
+#[test]
+fn merged_accept_list_over_16_is_an_error() {
+    let pairs: Vec<(u32, u8)> = (0..16).map(|i| (50_000 + i, i as u8)).collect();
+    let new = |list: &[(u32, u8)]| {
+        let mut sl = slots();
+        let mav = mavlink_device::Config::new(OWN_SYS, 1)
+            .with_accept_list(list)
+            .unwrap();
+        RcPort::new(Config::new(), mav, &mut sl).err()
+    };
+    assert_eq!(new(&pairs[..14]), None);
+    assert_eq!(new(&pairs[..15]), Some(NewError::AcceptListFull));
+    assert_eq!(new(&pairs[..16]), Some(NewError::AcceptListFull));
+    let mut both = pairs[..14].to_vec();
+    both.extend([(70, 1), (109, 2)]);
+    assert_eq!(
+        new(&both),
+        None,
+        "the port's ids listed by the application count once"
+    );
+    let mut one = pairs[..15].to_vec();
+    one.push((109, 2));
+    assert_eq!(new(&one), Some(NewError::AcceptListFull));
+}
+
+/// The application listing RC_CHANNELS_OVERRIDE itself (with CRC_EXTRA 0, not its 124: the
+/// port's wins) changes nothing: the same reports and counters, no `Hooks::mavlink` call.
+#[test]
+fn application_listing_rc_channels_override_changes_nothing() {
+    let run = |mav: mavlink_device::Config| {
+        let mut scen = Scen::default();
+        let end = scen.mav_stream(MS, 600 * MS, Some(&MAV_CH));
+        let mut sl = slots();
+        let mut sim = Sim::with_mav(Config::new(), mav, &mut sl);
+        sim.wire = scen.wire;
+        sim.run_until(end / US + 1_000);
+        (sim.hooks.reports, sim.port.stats(), sim.hooks.mavlink)
+    };
+    let plain = run(mavlink_device::Config::new(OWN_SYS, 1));
+    let listed = run(mavlink_device::Config::new(OWN_SYS, 1)
+        .with_accept_list(&[(70, 0)])
+        .unwrap());
+    assert!(plain.1.sticks > 20, "{:?}", plain.1);
+    assert_eq!(listed.0, plain.0);
+    assert_eq!(listed.1, plain.1);
+    assert!(listed.2.is_empty() && plain.2.is_empty());
 }

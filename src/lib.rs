@@ -59,7 +59,7 @@ pub use config::{
     CRSF_BAUD, CRSF_TX_INTERVAL_US, Config, D_CRSF_US, D_MAV_US, LOCK_FRAMES, MAVLINK_BAUD,
     T_LEAVE_CRSF_US, T_LEAVE_MAV_US,
 };
-pub use port::{Action, Hooks, Mode, RcPort, Stats, UartError};
+pub use port::{Action, Hooks, Mode, NewError, RcPort, Stats, UartError};
 pub use report::{CrsfLinkReport, RadioStatus, RadioStatusReport, Report, Source, StickReport};
 pub use run::{RunError, SetBaud, TxBusy};
 

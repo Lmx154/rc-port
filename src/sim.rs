@@ -22,10 +22,11 @@
 
 use crate::{Action, Config, Hooks, Mode, RcPort, Report, Stats, UartError};
 use crsf_codec::{Battery, MAX_FRAME_LEN, encode_battery};
-use marv_dialect::{MAVLinkV2MessageRaw, MavHeader, MessageData};
+use marv_dialect::{MAVLinkV2MessageRaw, MavHeader, MavlinkVersion, MessageData, ParserError};
 use mavlink_device::dialect::{ATTITUDE_DATA, RADIO_STATUS_DATA, RC_CHANNELS_OVERRIDE_DATA};
 use mavlink_device::{
-    Outgoing, ParamError, ParamName, ParamStore, ParamValue, Stream, StreamSlot, Telemetry,
+    Incoming, Outgoing, ParamError, ParamName, ParamStore, ParamValue, Stream, StreamSlot,
+    Telemetry,
 };
 use std::collections::VecDeque;
 use std::vec::Vec;
@@ -354,6 +355,44 @@ pub fn radio_status(rssi: u8, txbuf: u8) -> RADIO_STATUS_DATA {
     }
 }
 
+/// The id of the application's own MAVLink message in the tests (not in the common dialect).
+pub const CUSTOM_ID: u32 = 42_420;
+/// An id in no accept list (not in the common dialect).
+pub const UNLISTED_ID: u32 = 42_421;
+/// The CRC_EXTRA of both.
+pub const CUSTOM_EXTRA: u8 = 0x5A;
+
+/// A made-up message `ID` whose payload is a 4-byte marker (little-endian, trailing zeros cut).
+pub struct Custom<const ID: u32>(pub u32);
+
+impl<const ID: u32> MessageData for Custom<ID> {
+    type Message = mavlink_device::dialect::MavMessage;
+    const ID: u32 = ID;
+    const NAME: &'static str = "MARV_TEST";
+    const EXTRA_CRC: u8 = CUSTOM_EXTRA;
+    const ENCODED_LEN: usize = 4;
+
+    fn ser(&self, _: MavlinkVersion, payload: &mut [u8]) -> usize {
+        let b = self.0.to_le_bytes();
+        payload[..4].copy_from_slice(&b);
+        4 - b.iter().rev().take_while(|x| **x == 0).count().min(3)
+    }
+
+    fn deser(_: MavlinkVersion, payload: &[u8]) -> Result<Self, ParserError> {
+        let mut b = [0u8; 4];
+        let n = payload.len().min(4);
+        b[..n].copy_from_slice(&payload[..n]);
+        Ok(Self(u32::from_le_bytes(b)))
+    }
+}
+
+/// The application's config with [`CUSTOM_ID`] on its accept list.
+pub fn custom_listed() -> mavlink_device::Config {
+    mavlink_device::Config::new(OWN_SYS, 1)
+        .with_accept_list(&[(CUSTOM_ID, CUSTOM_EXTRA)])
+        .unwrap()
+}
+
 /// No parameters.
 pub struct NoParams;
 
@@ -407,6 +446,8 @@ pub struct Rec {
     pub reports: Vec<Report>,
     pub last_stats: Option<Stats>,
     pub crsf_asked: Vec<u64>,
+    /// `Hooks::mavlink` calls: (message id, marker, `now_us`).
+    pub mavlink: Vec<(u32, u32, u64)>,
 }
 
 impl Hooks for Rec {
@@ -419,6 +460,11 @@ impl Hooks for Rec {
     }
     fn stats(&mut self, stats: &Stats) {
         self.last_stats = Some(*stats);
+    }
+    fn mavlink(&mut self, msg: Incoming<'_>) {
+        let marker = msg.decode::<Custom<CUSTOM_ID>>().map_or(u32::MAX, |c| c.0);
+        let marker = msg.decode::<Custom<UNLISTED_ID>>().map_or(marker, |c| c.0);
+        self.mavlink.push((msg.message_id, marker, msg.now_us));
     }
 }
 
@@ -494,9 +540,17 @@ pub struct Sim<'a> {
 
 impl<'a> Sim<'a> {
     pub fn new(config: Config, slots: &'a mut [StreamSlot]) -> Self {
+        Self::with_mav(config, mavlink_device::Config::new(OWN_SYS, 1), slots)
+    }
+
+    pub fn with_mav(
+        config: Config,
+        mav: mavlink_device::Config,
+        slots: &'a mut [StreamSlot],
+    ) -> Self {
         let start_baud = 115_200;
         Self {
-            port: RcPort::new(config, mavlink_device::Config::new(OWN_SYS, 1), slots),
+            port: RcPort::new(config, mav, slots).unwrap(),
             wire: Wire::default(),
             rx: Receiver::new(start_baud),
             tx: Transmitter {

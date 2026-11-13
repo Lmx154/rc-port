@@ -354,7 +354,8 @@ fn drive(config: Config, drop_every: Option<u64>, tx_div: u32) -> Outcome {
         clock: clock.clone(),
     };
     let mut slots = slots();
-    let mut port = RcPort::new(config, mavlink_device::Config::new(OWN_SYS, 1), &mut slots);
+    let mut port =
+        RcPort::new(config, mavlink_device::Config::new(OWN_SYS, 1), &mut slots).unwrap();
     let mut hooks = Rec::default();
     let mut params = NoParams;
     let mut tel = Tel;
@@ -592,7 +593,8 @@ fn run_future_is_send() {
         Config::new(),
         mavlink_device::Config::new(OWN_SYS, 1),
         &mut slots,
-    );
+    )
+    .unwrap();
     let (mut u, mut d, mut p, mut t, mut h) = (U, D, NoParams, Tel, Rec::default());
     let fut = port.run(&mut u, &mut d, || 0, &mut p, &mut t, &mut h);
     assert_send(&fut);
