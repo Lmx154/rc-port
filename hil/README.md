@@ -149,11 +149,11 @@ Note the wall-clock order of the steps; the log's `t=` gives the rest.
 ### Not verified (needs the board)
 
 - Seen in the one run: the port followed 16 changes each way, so `RcPort::run` changed the baud on the real PL011 and `tx_busy` went false (`tx_busy_polls` 9); the banner read the pull-up true; 0 `uart_overrun` with the 256-byte RX ring in that run; the handset showed the battery frame (12.3 V, 0.0 A, 0 mAh, 50 %).
-- Not observed: the radio off in MAVLink mode through the port, an overload of the downlink and the stream slowdown, stick reports in MAVLink mode through the port, a message of an application's own dialect through `Hooks::mavlink`, any other receiver, radio or ExpressLRS version, flight. A long stall of the logger (defmt-rtt holds a critical section while it encodes each line) would show as `uart_overrun`; none came in 600 s.
+- Not observed by `rc_follow`: the radio off in MAVLink mode through the port, an overload of the downlink and the stream slowdown, stick reports in MAVLink mode through the port, a message of an application's own dialect through `Hooks::mavlink`, any other receiver, radio or ExpressLRS version, flight. `rc_link` (below) later observed the radio off in MAVLink mode, the stream slowdown, an overload as seen from the board, and a message of the project's own dialect through `Hooks::mavlink`. A long stall of the logger (defmt-rtt holds a critical section while it encodes each line) would show as `uart_overrun`; none came in 600 s.
 
-## `rc_link`: the three checks still open (radio off in MAVLink mode, own-dialect message each way, downlink overload)
+## `rc_link`: radio off in MAVLink mode, own-dialect message each way, downlink overload
 
-Status: **BUILT ONLY, never run.** `cargo build --release --bin rc_link` in this folder builds it. Nothing here has been seen on the board.
+Status: **has run** on the board on 2026-11-13 (logs `rc_link-20261113-115428.log`, `rc_link-20261113-115915.log` and `rc_link-20261113-121455.log`, kept locally under `hil/logs/`). What it showed is in the crate's `README.md`, section "Measured on the MARV V2 Rev 1 board". `cargo build --release --bin rc_link` in this folder builds it.
 
 A copy of `rc_follow` (same UART0 set-up, GPIO14 TX driven, GPIO17 RX with its pull-up turned on after the UART is built; the same interrupt executor and thread-mode logger; the same snapshot; the same banner; the same `[MODE]`, `[EDGE]`, `[STK]`, `[LNK]`, `[CNT]` and `[ERR]` lines; the same fixed CRSF battery frame with `RC_FOLLOW_BATT_DV` and `RC_FOLLOW_BATT_PCT`), with three additions. `rc_follow` is unchanged. It decides nothing: **the log is judged afterwards**. It never touches PIO0, PIO1, PIO2, GPIO36-39 (the ESCs), the ADC or DMA; the only pin driven is GPIO14 (UART0 TX).
 
@@ -187,7 +187,13 @@ Read the log with `grep -E '\[(MODE|EDGE|STK|LNK|CNT|TST|ERR)\]' hil/logs/rc_lin
 - **(2) `MARV_TEST` each way through the radio.** The ground-station tool sends `MARV_TEST` with `tag` 2 and counts what it receives (`tag` 1). Each way 100 frames or more: compare `[TST]` `recv` with what the tool sent, and the tool's received count with `[TST]` `sent`; at least 95 % intact each way, `decode_failures` 0, `from=` the ground station's system/component as the radio passes it, `value` and `seq` as the tool sent them.
 - **(3) Downlink overloaded** (`RC_LINK_LOAD_HZ=100`). Expected: `[LNK] radio_status` `txbuf` falls (below 50, then below 20); `[CNT]` `stream_slowdown_ms` rises (by 20 or 60 per RADIO_STATUS, up to 2000 and a little over); `[CNT]` `tx_bytes_mav` per second and `[TST]` `sent` and `load_sent` per second fall toward what the link carries; recovery when the load is removed (the second build with load 0): `txbuf` back above 90, `stream_slowdown_ms` falling to 0, `tx_bytes_mav` back to about 271 a second (250 + 21). Note that a baud change (any leave of the MAVLink lock) also sets the slowdown to 0.
 
-### Not verified (needs the board)
+### Ground-station link: notes for whoever repeats it
 
-- Everything above: never run. Whether the receiver passes id 42420 at all each way; the receiver's real downlink rate; how its `txbuf` behaves under load; whether the ground-station tool and this program agree on `MARV_TEST` (same CRC_EXTRA 100 and field order, by the dialect's definition only).
-- The stream slowdown on the board: the node's rule is ArduPilot's, tested on the host only.
+- The telemetry network comes from Backpack, Telemetry, WiFi in the ELRS Lua script, not from "Enable Backpack WiFi" (that starts the update page). The network is named "ExpressLRS TX Backpack 000000" (password `expresslrs`); the computer got 10.0.0.100 and the backpack is 10.0.0.1.
+- It needs TX backpack firmware 1.5.0 or newer; with 1.3.0 nothing was forwarded (nothing arrived on UDP 14550 and the board received 0 `MARV_TEST`). The run that worked used 1.5.9.
+- The backpack sends MAVLink from 10.0.0.1:14555 to UDP port 14550 without being spoken to first, so a station that listens on 14550 and learns its peer from what arrives works.
+- The backpack's access point answers every DNS name with its own address, so a computer joined to it as it comes loses name resolution. Set the computer's connection to ignore the network's DNS and never be a default route; on the owner's machine: `nmcli connection modify "ExpressLRS TX Backpack" ipv4.ignore-auto-dns yes ipv4.never-default yes` (the connection name is the one of the network joined).
+
+### Not verified
+
+- The overload as seen from the ground station; the slowdown's negative control (the slowdown switched off); a counted test over minutes; any other receiver, radio or ExpressLRS version.
