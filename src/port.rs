@@ -2,10 +2,14 @@
 
 use crate::config::{Config, LOCK_FRAMES, MAVLINK_BAUD, T_LEAVE_CRSF_US};
 use crate::report::{CrsfLinkReport, RadioStatus, RadioStatusReport, Report, Source, StickReport};
+use core::cell::Cell;
 use crsf_codec::{Deframer, Frame, MAX_FRAME_LEN, raw_to_us};
 use marv_dialect::MessageData;
 use mavlink_device::dialect::{RADIO_STATUS_DATA, RC_CHANNELS_OVERRIDE_DATA};
-use mavlink_device::{FRAME_BUF, Incoming, MAX_ACCEPT, Node, ParamStore, StreamSlot, Telemetry};
+use mavlink_device::{
+    FRAME_BUF, Incoming, MAX_ACCEPT, Node, ParamError, ParamName, ParamStore, ParamValue,
+    StreamSlot, Telemetry,
+};
 
 /// The port's own entries of its node's accept list: the two messages it reports.
 const ACCEPT: [(u32, u8); 2] = [
@@ -158,6 +162,35 @@ pub struct Stats {
     pub uart_other: u32,
 }
 
+/// The application's parameters as the node sees them: reads as they are, writes refused with
+/// [`ParamError::Rejected`] unless `open` (locked on MAVLink).
+struct Gate<'p, P> {
+    params: &'p mut P,
+    open: &'p Cell<bool>,
+}
+
+impl<P: ParamStore> ParamStore for Gate<'_, P> {
+    fn count(&self) -> u16 {
+        self.params.count()
+    }
+    fn name(&self, i: u16) -> Option<ParamName> {
+        self.params.name(i)
+    }
+    fn get(&self, i: u16) -> Option<ParamValue> {
+        self.params.get(i)
+    }
+    fn find(&self, n: &ParamName) -> Option<u16> {
+        self.params.find(n)
+    }
+    fn set(&mut self, i: u16, v: ParamValue) -> Result<ParamValue, ParamError> {
+        if self.open.get() {
+            self.params.set(i, v)
+        } else {
+            Err(ParamError::Rejected)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Proto {
     Crsf,
@@ -235,6 +268,10 @@ impl Fsm {
             Proto::Crsf => self.config.crsf_baud,
             Proto::Mavlink => MAVLINK_BAUD,
         }
+    }
+
+    fn locked_on(&self, proto: Proto) -> bool {
+        matches!(self.state, State::Locked { proto: p, .. } if p == proto)
     }
 
     /// Applies the deadline due at `now_us`, if any; true when a baud change starts.
@@ -489,6 +526,12 @@ impl<'a> RcPort<'a> {
     /// RC_CHANNELS_OVERRIDE and RADIO_STATUS and the application's own entries), MAVLink 2,
     /// incompatibility flags 0, checksum right for the listed CRC_EXTRA, sender not the node's own
     /// system id (HEARTBEAT, parameter and command frames do not count).
+    ///
+    /// `params` is written only while locked on MAVLink: before the lock (and from frames that
+    /// come before the locking frame in the same call) the node gets a view of `params` whose
+    /// `set` returns `ParamError::Rejected`, so a PARAM_SET heard while listening at 460800
+    /// changes nothing (the node queues its answer, the value unchanged; it is written only if
+    /// the port locks on MAVLink before the next baud change drops it).
     pub fn receive(
         &mut self,
         bytes: &[u8],
@@ -510,9 +553,18 @@ impl<'a> RcPort<'a> {
             Proto::Crsf => self
                 .crsf
                 .push(bytes, |frame| fsm.on_crsf(frame, now_us, hooks)),
-            Proto::Mavlink => self
-                .node
-                .receive_with(bytes, now_us, params, &mut |m| fsm.on_mavlink(&m, hooks)),
+            Proto::Mavlink => {
+                let open = Cell::new(fsm.locked_on(Proto::Mavlink));
+                let mut params = Gate {
+                    params,
+                    open: &open,
+                };
+                self.node
+                    .receive_with(bytes, now_us, &mut params, &mut |m| {
+                        fsm.on_mavlink(&m, hooks);
+                        open.set(fsm.locked_on(Proto::Mavlink));
+                    });
+            }
         }
     }
 

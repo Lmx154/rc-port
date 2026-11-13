@@ -1750,3 +1750,70 @@ fn application_listing_rc_channels_override_changes_nothing() {
     assert_eq!(listed.1, plain.1);
     assert!(listed.2.is_empty() && plain.2.is_empty());
 }
+
+use mavlink_device::dialect::{MavParamType, PARAM_SET_DATA};
+use mavlink_device::{ParamError, ParamName, ParamStore, ParamValue};
+
+/// One REAL32 parameter, RC_TEST.
+struct OneParam(f32);
+
+impl ParamStore for OneParam {
+    fn count(&self) -> u16 {
+        1
+    }
+    fn name(&self, i: u16) -> Option<ParamName> {
+        (i == 0).then(|| ParamName::new("RC_TEST").unwrap())
+    }
+    fn get(&self, i: u16) -> Option<ParamValue> {
+        (i == 0).then_some(ParamValue::F32(self.0))
+    }
+    fn find(&self, n: &ParamName) -> Option<u16> {
+        (n.as_str() == "RC_TEST").then_some(0)
+    }
+    fn set(&mut self, i: u16, v: ParamValue) -> Result<ParamValue, ParamError> {
+        match (i, v) {
+            (0, ParamValue::F32(x)) => {
+                self.0 = x;
+                Ok(v)
+            }
+            _ => Err(ParamError::NotFound),
+        }
+    }
+}
+
+/// A PARAM_SET of RC_TEST to `value`, for this system and component.
+fn param_set(seq: u8, value: f32) -> Vec<u8> {
+    let mut id = [0u8; 16];
+    id[..7].copy_from_slice(b"RC_TEST");
+    let m = PARAM_SET_DATA {
+        param_value: value,
+        target_system: OWN_SYS,
+        target_component: 1,
+        param_id: id.into(),
+        param_type: MavParamType::MAV_PARAM_TYPE_REAL32,
+    };
+    mav(ELRS_SYS, ELRS_COMP, seq, &m)
+}
+
+/// No parameter write before the lock: a valid PARAM_SET heard while listening at 460800, among
+/// the first two lock-on frames, does not change the store; the same PARAM_SET after the lock
+/// does.
+#[test]
+fn param_set_applied_only_once_locked_on_mavlink() {
+    let mut sl = slots();
+    let mut rec = Rec::default();
+    let (mut port, _) = port_listening(&mut sl, false, &mut rec);
+    let mut store = OneParam(1.0);
+    let radio = |seq| mav(ELRS_SYS, ELRS_COMP, seq, &radio_status(200, 100));
+    port.receive(&param_set(1, 2.0), 500, &mut store, &mut rec);
+    port.receive(&radio(2), 1_000, &mut store, &mut rec);
+    port.receive(&param_set(3, 2.0), 1_500, &mut store, &mut rec);
+    port.receive(&radio(4), 2_000, &mut store, &mut rec);
+    assert_eq!(port.stats().lock_discarded, 2);
+    assert_eq!(store.0, 1.0, "a PARAM_SET before the lock was applied");
+    port.receive(&radio(5), 3_000, &mut store, &mut rec);
+    assert_eq!(port.stats().mode, Mode::Mavlink);
+    assert_eq!(store.0, 1.0);
+    port.receive(&param_set(6, 2.0), 4_000, &mut store, &mut rec);
+    assert_eq!(store.0, 2.0, "the PARAM_SET after the lock was not applied");
+}
