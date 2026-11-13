@@ -124,7 +124,9 @@ pub struct Stats {
     /// messages; `mavlink_device::Stats::dropped_checksum` and `dropped_listed_checksum`).
     pub crc_errors: u32,
     /// Bytes thrown away outside any frame by either decoder, plus bytes received during a baud
-    /// change (they were sampled at a baud the port no longer knows).
+    /// change (they were sampled at a baud the port no longer knows), plus the bytes the CRSF
+    /// deframer held when a baud change ended (`Deframer::clear`). The bytes the node's MAVLink
+    /// receive buffer held then are dropped by `Node::on_link_down` without being counted.
     pub garbage_bytes: u32,
     /// [`UartError::Framing`] events.
     pub uart_framing: u32,
@@ -393,8 +395,6 @@ impl Fsm {
 pub struct RcPort<'a> {
     fsm: Fsm,
     crsf: Deframer,
-    crsf_garbage_carry: u32,
-    crsf_crc_carry: u32,
     switch_garbage: u32,
     node: Node<'a>,
     tx: [u8; FRAME_BUF],
@@ -425,8 +425,6 @@ impl<'a> RcPort<'a> {
                 stats: Stats::default(),
             },
             crsf: Deframer::new(),
-            crsf_garbage_carry: 0,
-            crsf_crc_carry: 0,
             switch_garbage: 0,
             node: Node::new(mav, streams),
             tx: [0; FRAME_BUF],
@@ -549,8 +547,8 @@ impl<'a> RcPort<'a> {
     }
 
     /// After [`Action::Flush`], [`Action::WaitTxIdle`] or [`Action::SetBaud`]: it is done. After
-    /// the baud is set, both decoders' buffers are cleared (the CRSF deframer is replaced, its
-    /// counters kept; `Node::on_link_down` for MAVLink) and listening begins, for
+    /// the baud is set, both decoders' buffers are cleared (`Deframer::clear` for CRSF, which counts
+    /// the bytes it held as garbage; `Node::on_link_down` for MAVLink) and listening begins, for
     /// [`Config::d_mav_us`] or [`Config::d_crsf_us`] from `now_us`. Ignored when no such action
     /// is pending.
     pub fn done(&mut self, now_us: u64) {
@@ -567,10 +565,7 @@ impl<'a> RcPort<'a> {
                 step: Step::SetBaud,
             },
             Step::SetBaud => {
-                let old = self.crsf.stats();
-                self.crsf_garbage_carry = self.crsf_garbage_carry.saturating_add(old.garbage_bytes);
-                self.crsf_crc_carry = self.crsf_crc_carry.saturating_add(old.crc_errors);
-                self.crsf = Deframer::new();
+                self.crsf.clear();
                 self.node.on_link_down();
                 State::Listening {
                     proto: to,
@@ -610,14 +605,12 @@ impl<'a> RcPort<'a> {
         let crsf = self.crsf.stats();
         let mav = self.node.stats();
         let mut s = self.fsm.stats;
-        s.crc_errors = self
-            .crsf_crc_carry
-            .saturating_add(crsf.crc_errors)
+        s.crc_errors = crsf
+            .crc_errors
             .saturating_add(mav.dropped_checksum)
             .saturating_add(mav.dropped_listed_checksum);
-        s.garbage_bytes = self
-            .crsf_garbage_carry
-            .saturating_add(crsf.garbage_bytes)
+        s.garbage_bytes = crsf
+            .garbage_bytes
             .saturating_add(mav.garbage_bytes)
             .saturating_add(self.switch_garbage);
         s
