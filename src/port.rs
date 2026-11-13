@@ -102,7 +102,8 @@ pub trait Hooks {
         let _ = msg;
     }
 
-    /// The counters, called by [`RcPort::run`] once per wake when they changed, and after each
+    /// The counters, called by [`RcPort::run`] once per wake when any field of [`Stats`] changed
+    /// ([`Stats::stream_slowdown_ms`] included), and after each
     /// busy check while it waits for the transmitter to go idle (the sans-IO core does not call
     /// it: use [`RcPort::stats`]).
     fn stats(&mut self, stats: &Stats) {
@@ -110,7 +111,8 @@ pub trait Hooks {
     }
 }
 
-/// Counters and timestamps; nothing else. No loss flag: ages are the application's to compute.
+/// Counters and timestamps, and the node's stream slowdown; nothing else. No loss flag: ages are the
+/// application's to compute.
 ///
 /// The `u32` counters saturate, except the three report counters, which are the `seq` of the last
 /// report of their kind and wrap.
@@ -166,6 +168,12 @@ pub struct Stats {
     /// followed by a 20 us delay). It only counts: the wait has no timeout. Always 0 with the
     /// sans-IO core alone.
     pub tx_busy_polls: u32,
+    /// The MAVLink node's stream slowdown in milliseconds, as `Node::stream_slowdown_ms` reads it
+    /// now: not a counter (it falls as well as rises). Each RADIO_STATUS the node accepts moves it
+    /// by ArduPilot's steps (`txbuf` below 20: +60, below 50: +20, while under 2000; above 95:
+    /// -40 while over 200; above 90: -20 down to 0); every baud change sets it to 0
+    /// (`Node::on_link_down`).
+    pub stream_slowdown_ms: u32,
 }
 
 /// The application's parameters as the node sees them: reads as they are, writes refused with
@@ -716,6 +724,7 @@ impl<'a> RcPort<'a> {
             .garbage_bytes
             .saturating_add(mav.garbage_bytes)
             .saturating_add(self.switch_garbage);
+        s.stream_slowdown_ms = self.node.stream_slowdown_ms();
         s
     }
 

@@ -627,3 +627,58 @@ fn run_counts_idle_wait_polls_that_found_the_transmitter_busy() {
         Some(o.stats.tx_busy_polls)
     );
 }
+
+/// `Stats::stream_slowdown_ms` is the node's slowdown and reaches `Hooks::stats`: RADIO_STATUS
+/// every 10 ms with `txbuf` 100 (the three that lock), then 10, 10, 30, 49, 50, 19 move it by
+/// ArduPilot's steps (+60 below 20, +20 below 50, 50 unchanged) to 0, 60, 120, 140, 160, 220; when
+/// the frames stop, the lock is left and the baud change (`Node::on_link_down`) sets it to 0.
+#[test]
+fn stats_carry_the_node_stream_slowdown_to_the_hook() {
+    const TXBUF: [u8; 9] = [100, 100, 100, 10, 10, 30, 49, 50, 19];
+    let mut wire = Wire::default();
+    for (k, txbuf) in TXBUF.iter().enumerate() {
+        let t = (20 + 10 * k as u64) * MS;
+        let status = radio_status(200, *txbuf);
+        wire.send(t, MAVLINK_BAUD, &mav(ELRS_SYS, ELRS_COMP, k as u8, &status));
+    }
+    let end = wire.end() + 300 * MS;
+    let clock: Clock = Rc::new(Cell::new(0));
+    let mut uart = FakeUart::new(clock.clone(), wire);
+    let mut delay = FakeDelay {
+        clock: clock.clone(),
+    };
+    let mut slots = slots();
+    let mut port = RcPort::new(
+        Config::new(),
+        mavlink_device::Config::new(OWN_SYS, 1),
+        &mut slots,
+    )
+    .unwrap();
+    let (mut hooks, mut params, mut tel) = (Rec::default(), NoParams, Tel);
+    {
+        let c = clock.clone();
+        let mut fut = pin!(port.run(
+            &mut uart,
+            &mut delay,
+            move || c.get() / US,
+            &mut params,
+            &mut tel,
+            &mut hooks,
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        while clock.get() < end {
+            assert!(fut.as_mut().poll(&mut cx).is_pending(), "run returned");
+            clock.set(clock.get() + STEP_PS);
+        }
+    }
+    let mut seen = hooks.slowdown_seen.clone();
+    seen.dedup();
+    assert_eq!(seen, [0, 60, 120, 140, 160, 220, 0]);
+    let s = port.stats();
+    assert_eq!(s.radio_status, 7, "frames 3 to 9 reported");
+    assert_eq!(s.mode, Mode::Searching);
+    assert_eq!(s.mode_changes, 0);
+    assert_eq!(s.stream_slowdown_ms, 0);
+    assert_eq!(port.node().stream_slowdown_ms(), 0);
+    assert_eq!(hooks.last_stats, Some(s));
+}
