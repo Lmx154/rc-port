@@ -23,7 +23,7 @@ Two listeners hear GPIO17 at once, so both protocols are seen without knowing wh
 
 Each listener hears the other protocol as garbage; its bytes and errors are counted too.
 
-The pin is shared as in dshot's `dshot_smoke` (dshot README rule B9): PIO1 is given GPIO17 first (`make_pio_pin` on a second handle, then `UartRx::new`, which turns the pad pull-up on), and THEN the UART takes the pad (function UART0 RX). The UART's pad write in embassy-rp 0.10 writes the whole word from rp-pac's default 0 with only input enable set (`uart/mod.rs` `init`, the `rx` pad write): by reading the code, **both pulls end up off and the pad floats**, the pull-up `UartRx` set and the reset pull-down alike, exactly as rc-port's own UART will leave it. This is not what the decision's section 7 assumed ("whether the RX pad's reset pull-down stays on"); the banner prints the pad's state after setup (`pull-down`, `pull-up`, `input enabled`), which settles it on the board.
+The pin is shared as in dshot's `dshot_smoke` (dshot README rule B9): PIO1 is given GPIO17 first (`make_pio_pin` on a second handle, then `UartRx::new`, which turns the pad pull-up on), and THEN the UART takes the pad (function UART0 RX). The UART's pad write in embassy-rp 0.10 writes the whole word from rp-pac's default 0 with only input enable set (`uart/mod.rs` `init`, the `rx` pad write): by reading the code, **both pulls end up off and the pad floats**, the pull-up `UartRx` set and the reset pull-down alike, exactly as rc-port's own UART will leave it. This is not what the decision's section 7 assumed ("whether the RX pad's reset pull-down stays on"); the banner prints the pad's state after setup (`pull-down`, `pull-up`, `input enabled`), which settles it on the board: in the captures it read function 2 (UART0), no pull-up, no pull-down, input enabled, level 1.
 
 ### Wiring
 
@@ -81,14 +81,14 @@ Each sequence three times. Pause about 10 s between steps, so that each step has
 
 ### Not verified (needs the board)
 
-- That the two listeners really share GPIO17 as designed (the banner's pad line shows funcsel 2 and the pull; both listeners counting frames shows the rest).
-- That nothing is lost: the buffer sizes and the interrupt executor are argued from the rates, not measured.
+- That the two listeners really share GPIO17 as designed: in the two runs both listeners counted frames and the banner read function 2 with no pull-up and no pull-down.
+- That nothing is lost: in the two runs UART overruns were 0 and PIO overruns 0; the buffer sizes and the interrupt executor are otherwise argued from the rates, not measured.
 - The pio-uart divider at 460800 and 150 MHz is 20 + 88/256 (about +64 ppm, inside its tolerance by arithmetic); the PL011 at 420000 from 150 MHz is about +400 ppm. Neither is measured.
 - The HAL reports one error per read when its ring is empty, the most severe of those seen (overrun, then break, parity, framing), and drops the byte that carried it: the error counts are counts of indications, not of bytes.
 
 ## `rc_follow`: the port itself, following the receiver (decision R2, R3, R4, R5)
 
-Status: **BUILT ONLY, never run.** `cargo build --release --bin rc_follow` in this folder; it has not been flashed, and nothing below has been observed.
+Status: has run once (2026-11-13, one 600 s run, log `rc_follow-20261113-111239.log`, kept locally under `logs/`). What it showed is in the main README, section "Measured on the MARV V2 Rev 1 board", with what has not yet been observed. `cargo build --release --bin rc_follow` in this folder builds it.
 
 It runs `rc_port::RcPort::run` (feature `embassy-rp-0-10`) on UART0 and logs what the port reports: modes, stick reports, link reports and every counter. It decides nothing on the board: no PASS/FAIL or RESULT line, no failsafe, no loss decision, no arming; **the log is judged afterwards**. It runs until the probe's timeout ends it.
 
@@ -148,6 +148,5 @@ Note the wall-clock order of the steps; the log's `t=` gives the rest.
 
 ### Not verified (needs the board)
 
-- Everything above: nothing has run. In particular that `RcPort::run` changes the baud on the real PL011 (`set_baudrate` writes the divisors, then disables the UART, waits 15 bit periods at the old rate and re-enables it, `uart/mod.rs` `lcr_modify`), that `tx_busy` goes false, and that the pull-up is what the banner prints.
-- That 256 bytes of RX ring are enough: the port's task runs above thread mode, but defmt-rtt holds a critical section while it encodes each line (and, if the probe's buffer is full in blocking mode, while it waits); a long stall would show as `uart_overrun`.
-- That the receiver accepts the battery frame at one per 100 ms and shows it.
+- Seen in the one run: the port followed 16 changes each way, so `RcPort::run` changed the baud on the real PL011 and `tx_busy` went false (`tx_busy_polls` 9); the banner read the pull-up true; 0 `uart_overrun` with the 256-byte RX ring in that run; the handset showed the battery frame (12.3 V, 0.0 A, 0 mAh, 50 %).
+- Not observed: the radio off in MAVLink mode through the port, an overload of the downlink and the stream slowdown, stick reports in MAVLink mode through the port, a message of an application's own dialect through `Hooks::mavlink`, any other receiver, radio or ExpressLRS version, flight. A long stall of the logger (defmt-rtt holds a critical section while it encodes each line) would show as `uart_overrun`; none came in 600 s.

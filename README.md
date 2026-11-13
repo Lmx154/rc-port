@@ -4,12 +4,12 @@ The UART of an ExpressLRS receiver on the MARV V2 flight controller. When the tr
 
 The crate is `no_std`, `forbid(unsafe_code)`, with no allocation, no `static` and no spinning. `RcPort` is a sans-IO core over a [`crsf-codec`](../crsf-codec) `Deframer` and a [`mavlink-device`](../mavlink-device) `Node`: bytes, UART errors and a time in; actions (writes, baud changes) and reports out. `RcPort::run` drives it on a UART with `embedded-io-async` 0.7 and `embedded-hal-async` 1.0. The feature `embassy-rp-0-10` implements the two small traits `run` needs for embassy-rp 0.10's `BufferedUart`.
 
-**Status: version 0.1.0 (`publish = false`); the API may still change. Host tests only. NOTHING has run on a board or against a receiver.** Every number below that comes from the bench is a default waiting for the bench (R2a). On ExpressLRS 4.0.1 the receiver may send **no stick messages in MAVLink mode** after it has output CRSF since power-up (inferred from its source, NOT observed; see "The MAVLink stick messages may never come"); in that case this crate reports none, because none arrive.
+**Status: version 0.1.0 (`publish = false`); the API may still change. Host tests, and one 600 s run on the MARV V2 Rev 1 board on 2026-11-13: the program `hil/src/bin/rc_follow.rs` ran `RcPort::run` against a RadioMaster RP4TD-M receiver and a RadioMaster Pocket, both ExpressLRS 4.0.1 (log `rc_follow-20261113-111239.log`, kept locally under `hil/logs/`). What it showed is under "Measured on the MARV V2 Rev 1 board", and what has not been observed is under "Not yet observed".** On ExpressLRS 4.0.1 the receiver sends **no stick messages in MAVLink mode** once it has output CRSF in the same power-up (observed; see "The MAVLink stick messages stop once CRSF has run"); this crate reports none, because none arrive.
 
 ## Works with
 
 - Any MCU and HAL whose UART implements `embedded_io_async::{Read, Write}` (the reader cancel-safe, and returning `Pending` when it has nothing; see "Use"), plus this crate's `SetBaud` (change the baud rate of the running UART) and `TxBusy` (is the transmitter still sending), and an `embedded_hal_async::delay::DelayNs`. Any executor; no embassy crate in the core.
-- embassy-rp 0.10, RP2350, the unsplit `embassy_rp::uart::BufferedUart`, with the feature `embassy-rp-0-10` (the chip feature, for example `embassy-rp/rp235xb`, comes from the application). It only builds tonight; it has never run.
+- embassy-rp 0.10, RP2350, the unsplit `embassy_rp::uart::BufferedUart`, with the feature `embassy-rp-0-10` (the chip feature, for example `embassy-rp/rp235xb`, comes from the application). It ran on the board once (see "Measured on the MARV V2 Rev 1 board").
 - The sans-IO core on its own, with any I/O.
 
 Dependencies: `crsf-codec` is a **path dependency** (`../crsf-codec`: it has no remote yet). `mavlink-device` is on GitHub (main at 09dfd17: the accept list with `AcceptList::iter` and `contains`, which this crate uses) but stays a **path dependency** (`../mavlink-device`), because `crsf-codec` has no remote: the crate cannot be built from git alone either way. `marv-dialect` is a git dependency pinned to the same commit as `mavlink-device`'s own (`61915e6`), so that both use one copy. Both crates are re-exported (`rc_port::crsf_codec`, `rc_port::mavlink_device`) so that the application uses the same versions.
@@ -137,27 +137,51 @@ D_A is the listening time at A's baud, P the longest interval between the starts
 
 Re-lock after a total loss in CRSF mode, frames returning at t_r while searching (`crsf_link_lost_keeps_searching_writes_nothing_relocks_within_bound`): relock - t_r <= D_MAV + 5 P + 2 d + 2 eps + 2 w (the argument is at the top of `src/tests.rs`). Frames that return near the end of a CRSF listening period start a lock-on that the next baud change cuts; the lock then waits for one 460800 period and two baud changes. On the model at 250 Hz the worst re-lock seen was 64.7 ms (bound 73.3 ms), at 50 Hz 110.7 ms (bound 153.3 ms).
 
-These are host results on the model (see "Tests"), not board results.
+These are host results on the model (see "Tests"), not board results; the lock times seen on the board are under "Measured on the MARV V2 Rev 1 board".
 
 ## What the application must do
 
 - Provide the clock (`now_us`, microseconds), the executor and the task that awaits `run` (or the loop of the sans-IO calls), the `[StreamSlot]` slice, the `ParamStore` and `Telemetry` of `mavlink-device`, and the `Hooks` (reports, CRSF telemetry frames, counters).
 - Make its own loss and failsafe decisions from the timestamps and counters: ages are `now - last_sticks_us` and so on. For reference only, not as policy here (decision section 3): Betaflight's `crsf.c` only reports frames, RXLOSS after 150 ms without a frame (`rx.c:137, 565-631`), failsafe stage 2 after 1.5 s (`failsafe.c:89`); ArduPilot's backend reports input with failsafe false (`AP_RCProtocol_CRSF.cpp:248`), the radio failsafe fires after `RC_FS_TIMEOUT`, default 1.0 s (ArduCopter `radio.cpp:115-132`), overrides count as RC input and expire after `RC_OVERRIDE_TIME`, default 3.0 s (`RC_Channel.cpp:563-578`). Neither uses link quality for failsafe.
+- Set a pull-up on the UART's RX pad after the UART is built: embassy-rp 0.10 leaves the pad with no pull. The bench program does it with one pad write (`pac::PADS_BANK0.gpio(17).modify(|w| w.set_pue(true))`).
 - Choose which stick source is in charge, which MAVLink senders to accept, and whether a change of protocol is allowed while armed (the decision flags "disarmed only" as beyond both Betaflight and ArduPilot; the driver always follows, and while armed a change simply looks like a gap in stick reports).
 - While `run` is awaited the port cannot be touched: everything goes through `Hooks`, `ParamStore` and `Telemetry`, which are called from the port's task and must not block.
 
-## The MAVLink stick messages may never come
+## Measured on the MARV V2 Rev 1 board
 
-ExpressLRS 4.0.1, **inferred from its source, NOT observed** (decision, "The finding that gates the MAVLink half"): in MAVLink mode the receiver sends RC_CHANNELS_OVERRIDE from a `timeout()` that, once CRSF output has run since power-up, is probably never called again; this includes the first change Normal to MAVLink after booting in Normal (ExpressLRS issue 3860 reports the same after MAVLink, Normal, MAVLink on 4.1.0). RADIO_STATUS and ground-station traffic are not affected. If so, this crate locks on MAVLink (RADIO_STATUS keeps it there), reports RADIO_STATUS, and reports **no sticks**, because none arrive. The first board step (R2a) observes it.
+One 600 s run on 2026-11-13 of `hil/src/bin/rc_follow.rs` (rc-port 36759be): `RcPort::run` on UART0 (`BufferedUart`, 256-byte rings, GPIO17 RX, GPIO14 TX), the receiver a RadioMaster RP4TD-M and the transmitter a RadioMaster Pocket, both ExpressLRS 4.0.1, the board on USB power with no battery and the owner at the radio. The log is `rc_follow-20261113-111239.log`, kept locally under `hil/logs/`. One receiver, one radio, one run.
+
+- Whole run: 0 restarts of `run`, 0 UART overruns, 1 CRC error (during a change), `tx_busy_polls` 9.
+- RX pad: the pull-up was set after the UART was built; the banner read pull-up true, level 1.
+- Lock at start: locked on CRSF 62.8 ms after start (50 ms at 460800 first, then 420000); frames 1 and 2 discarded, the third reported 7.9 ms after the first.
+- CRSF in: 246 stick reports per second (intervals 3.95 to 8.03 ms) and 10 link-statistics reports per second. With the sticks moved to both ends the once-a-second samples read roll 989 to 2012, yaw 989 to 2012, throttle 991 to 2007 and pitch 1328 to 2012 (pitch down fell between samples); at rest, over the whole run, 1500 to 1515, 1500, 996 to 999 and 1489 to 1500.
+- Radio off: the stick reports stopped at once; the receiver went on sending link statistics for about 2.97 s (so the lock held on valid frames), then silence; the port left Crsf exactly 1 000 000 us after the last valid frame.
+- Radio on: for some seconds only link statistics came back (10 per second, 2 per 200 ms listening period), and on those the port did not lock with the default 200 ms listening period (22 lock-on frames discarded); then the stick frames came, and the first stick report came 24.3 ms after the first of them (2 discarded, the third reported). So "2 frames discarded" holds for the lock that brings the sticks back, not for the link-statistics-only phase before it. From the last stick report to a lock on MAVLink is about 4.2 s (about 3 s of link statistics after the sticks stop, then `T_LEAVE_CRSF`, then the search).
+- CRSF telemetry out: the Pocket showed RxBt 12.3 V, Curr 0.0 A, Bat% 50 % and Capa 0 mAh (read by the owner), which is exactly the fixed frame sent every 100 ms (120 bytes per second).
+- MAVLink mode (the receiver already past CRSF in this power-up): RADIO_STATUS 91 per second from system 255, component 68, with `rssi` 254; `txbuf` 100, 97 or 95 with the board driving T0, the node sending only its heartbeat (21 bytes per second). No stick messages in that power-up: 0 MAVLink stick reports in the run.
+- Following the change: 16 changes each way in one run (`mode_changes` 32), every one followed. Into MAVLink: the port left Crsf 1.000 s after the last valid CRSF frame and locked 24 to 278 ms later (last CRSF frame to lock 1024 to 1278 ms, mean 1042). Into CRSF: last MAVLink frame to lock 1212 to 1218 ms in 13 of 16 (the line's own gap is about 1.2 s), 206 and 212 ms twice, 2508 ms once. The stick values after every return to CRSF stayed within the rest values above: no value the radio did not send.
+
+### Not yet observed
+
+- The radio off in MAVLink mode through the port.
+- An overload of the downlink, and the stream slowdown (no streams were configured).
+- Stick reports in MAVLink mode through the port. They were seen only by the capture (`rc_capture`), after a boot in that mode.
+- A message of an application's own dialect through `Hooks::mavlink`.
+- Any other receiver, radio or ExpressLRS version.
+- Flight.
+
+## The MAVLink stick messages stop once CRSF has run
+
+Observed on ExpressLRS 4.0.1 in the two listen-only captures of 2026-11-13 (`rc_capture-20261113-101707.log` and `-102410.log`): the receiver sends RC_CHANNELS_OVERRIDE in MAVLink mode only until it has output CRSF once in the same power-up; after that it sends none until it is power-cycled. Booted in the MAVLink model it sent 100 per second with RADIO_STATUS at 91 per second, for 45 s, the values following the sticks; after MAVLink, Normal, MAVLink with the receiver powered, 0 RC_CHANNELS_OVERRIDE came with about 909 RADIO_STATUS in every 10 s window, for more than 5 minutes, and a radio off and on did not bring them back. RADIO_STATUS is not affected. The crate reports whatever arrives: in the state without stick messages it locks on MAVLink (RADIO_STATUS keeps it there), reports RADIO_STATUS and reports no sticks.
 
 ## Not covered and not verified
 
-- **Anything on a board or with a receiver.** No baud change on a real UART, no real ExpressLRS stream, no re-open gap, no real `busy()` timing, no executor, no cancel on the real HAL. The embassy-rp back-end only compiles.
-- The bench numbers (CRSF baud, re-open gap, RADIO_STATUS period, RC frame period, telemetry pacing) are defaults; the bound above uses the model's frame periods (CRSF at 250 Hz and 50 Hz, RADIO_STATUS every 10 ms, RC_CHANNELS_OVERRIDE every 20 ms).
+- **Anything on a board or with a receiver beyond the one run in "Measured on the MARV V2 Rev 1 board"**, and what that section lists under "Not yet observed". No cancel on the real HAL.
+- The bound above uses the model's frame periods (CRSF at 250 Hz and 50 Hz, RADIO_STATUS every 10 ms, RC_CHANNELS_OVERRIDE every 20 ms), not the receiver's measured ones (246 RC frames per second, RADIO_STATUS 91 per second). The board run used D_MAV 50 ms, D_CRSF 200 ms and T_LEAVE_CRSF 1 s.
 - While locked, the CRC is the only defence: wrong-baud garbage that happens to form a valid frame of the locked protocol (CRSF: about 2^-24 per byte position, an RC frame about 2^-32) would count and could be reported. Not seen in the tests.
 - A dwell is not extended when a lock-on is in progress (the design says "alternate"); that is why the re-lock bound above has 5 P + 2 d + 2 eps + 2 w after D_MAV.
 - No stick report or lock from a CRSF baud equal to 460800 has been tested (`Config::crsf_baud` can be set to it; the search then alternates between the two protocols at one rate).
-- The simulated UART cannot produce noise, baud-rate error, the real receiver's oversampling and majority voting, FIFO overruns, or idle gaps inside a frame. How much wrong-baud garbage a real line yields, and what it looks like, is a bench question; the I16 results hold for the model.
+- The simulated UART cannot produce noise, baud-rate error, the real receiver's oversampling and majority voting, FIFO overruns, or idle gaps inside a frame. How much wrong-baud garbage a real line yields, and what it looks like, is a bench question; the I16 results hold for the model. On the real line, at the wrong baud, the 420000 listener decoded 0 CRSF frames from MAVLink traffic and the 460800 listener accepted 0 MAVLink frames from CRSF traffic in the two captures, which is consistent with the model but is one receiver and a few minutes.
 - No `defmt` feature yet.
 - `TxBusy` waiting has no timeout: with no hardware flow control the transmitter drains in at most its FIFO's time. A transmitter that stays busy shows as `Stats::tx_busy_polls` rising in `Hooks::stats`; what to do about it is the application's.
 
@@ -188,7 +212,7 @@ Lints and builds: `cargo clippy --all-targets -- -D warnings` on the host; the b
 
 ## Bench program (`hil/`)
 
-`hil/` is a separate crate (its own workspace) of on-board programs. `rc_capture` is the first board step (decision R2a): a listen-only capture of the receiver's line on GPIO17 by two listeners at once (UART0 at the CRSF rate, a `pio-uart` receiver on PIO1 at 460800), which does not use this crate. Status: **built only, never run**. Wiring, the command (`tools/run.sh rc_capture 600`), the sequences to perform and how to read the log: `hil/README.md`. `rc_follow` runs this crate's `RcPort::run` on UART0 (feature `embassy-rp-0-10`, GPIO14 TX driven, GPIO17 RX with its pull-up on) and logs modes, reports and counters for R2 to R5; it transmits only a fixed CRSF battery frame and the MAVLink node's own messages. Status: **built only, never run**; `tools/run.sh rc_follow 600`, details in `hil/README.md`.
+`hil/` is a separate crate (its own workspace) of on-board programs. `rc_capture` is the first board step (decision R2a): a listen-only capture of the receiver's line on GPIO17 by two listeners at once (UART0 at the CRSF rate, a `pio-uart` receiver on PIO1 at 460800), which does not use this crate. Status: has run twice (2026-11-13, logs `rc_capture-20261113-101707.log` and `-102410.log`). Wiring, the command (`tools/run.sh rc_capture 600`), the sequences to perform and how to read the log: `hil/README.md`. `rc_follow` runs this crate's `RcPort::run` on UART0 (feature `embassy-rp-0-10`, GPIO14 TX driven, GPIO17 RX with its pull-up on) and logs modes, reports and counters for R2 to R5; it transmits only a fixed CRSF battery frame and the MAVLink node's own messages. Status: has run once (2026-11-13, one 600 s run, log `rc_follow-20261113-111239.log`, kept locally under `hil/logs/`); what it showed is under "Measured on the MARV V2 Rev 1 board"; `tools/run.sh rc_follow 600`, details in `hil/README.md`.
 
 ## Cargo features
 
