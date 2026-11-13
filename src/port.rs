@@ -102,8 +102,9 @@ pub trait Hooks {
         let _ = msg;
     }
 
-    /// The counters, called by [`RcPort::run`] once per wake when they changed (the sans-IO core
-    /// does not call it: use [`RcPort::stats`]).
+    /// The counters, called by [`RcPort::run`] once per wake when they changed, and after each
+    /// busy check while it waits for the transmitter to go idle (the sans-IO core does not call
+    /// it: use [`RcPort::stats`]).
     fn stats(&mut self, stats: &Stats) {
         let _ = stats;
     }
@@ -160,6 +161,11 @@ pub struct Stats {
     pub uart_overrun: u32,
     /// [`UartError::Other`] events.
     pub uart_other: u32,
+    /// Checks of [`TxBusy::tx_busy`](crate::TxBusy::tx_busy) by [`RcPort::run`], while it waits
+    /// for the transmitter to go idle before a baud change, that found it still busy (each is
+    /// followed by a 20 us delay). It only counts: the wait has no timeout. Always 0 with the
+    /// sans-IO core alone.
+    pub tx_busy_polls: u32,
 }
 
 /// The application's parameters as the node sees them: reads as they are, writes refused with
@@ -711,6 +717,12 @@ impl<'a> RcPort<'a> {
             .saturating_add(mav.garbage_bytes)
             .saturating_add(self.switch_garbage);
         s
+    }
+
+    /// Counts one idle-wait check of `run` that found the transmitter busy.
+    pub(crate) fn count_tx_busy(&mut self) {
+        let n = &mut self.fsm.stats.tx_busy_polls;
+        *n = n.saturating_add(1);
     }
 
     /// The MAVLink node, for its counters, `gcs_present` and `stream_slowdown_ms`.

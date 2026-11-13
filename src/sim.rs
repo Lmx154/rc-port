@@ -448,6 +448,8 @@ pub struct Rec {
     pub crsf_asked: Vec<u64>,
     /// `Hooks::mavlink` calls: (message id, marker, `now_us`).
     pub mavlink: Vec<(u32, u32, u64)>,
+    /// `Stats::tx_busy_polls` at each `Hooks::stats` call.
+    pub tx_busy_seen: Vec<u32>,
 }
 
 impl Hooks for Rec {
@@ -460,6 +462,7 @@ impl Hooks for Rec {
     }
     fn stats(&mut self, stats: &Stats) {
         self.last_stats = Some(*stats);
+        self.tx_busy_seen.push(stats.tx_busy_polls);
     }
     fn mavlink(&mut self, msg: Incoming<'_>) {
         let marker = msg.decode::<Custom<CUSTOM_ID>>().map_or(u32::MAX, |c| c.0);

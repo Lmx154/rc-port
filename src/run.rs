@@ -49,11 +49,13 @@ enum Woke<E> {
 impl RcPort<'_> {
     /// Drives the port on `uart` forever: carries out every [`Action`] (a write with `write`,
     /// acknowledged byte-exactly; a baud change as `flush`, then a [`TxBusy::tx_busy`] check every
-    /// 20 us through `delay` until it is false, then [`SetBaud::set_baud`]), then waits for the
+    /// 20 us through `delay` until it is false, with no timeout, each busy answer counted in
+    /// [`Stats::tx_busy_polls`], then [`SetBaud::set_baud`]), then waits for the
     /// first of bytes from `uart` and [`next_deadline_us`](RcPort::next_deadline_us) (at most
     /// 100 ms). A read error is converted to [`UartError`] and counted, and the loop reads again at
     /// once. [`Hooks::stats`] gets the counters once per wake, after the actions, when they
-    /// changed.
+    /// changed, and after each busy check of the wait for the transmitter (so that a transmitter
+    /// that stays busy shows as a rising [`Stats::tx_busy_polls`]).
     ///
     /// It returns only on a write or flush error, a write of 0 bytes or a read of 0 bytes; the
     /// port keeps its state and `run` can be called again.
@@ -97,6 +99,10 @@ impl RcPort<'_> {
                     }
                     Action::WaitTxIdle => {
                         while uart.tx_busy() {
+                            self.count_tx_busy();
+                            let stats = self.stats();
+                            hooks.stats(&stats);
+                            reported = Some(stats);
                             delay.delay_us(TX_IDLE_POLL_US).await;
                         }
                         self.done(now_us());

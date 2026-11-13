@@ -332,6 +332,7 @@ fn three_segments() -> (Wire, u64) {
 struct Outcome {
     reports: Vec<Report>,
     last_stats_hook: Option<Stats>,
+    tx_busy_seen: Vec<u32>,
     stats: Stats,
     trace: Vec<UEv>,
     returned: bool,
@@ -402,6 +403,7 @@ fn drive(config: Config, drop_every: Option<u64>, tx_div: u32) -> Outcome {
     Outcome {
         reports: hooks.reports.clone(),
         last_stats_hook: hooks.last_stats,
+        tx_busy_seen: hooks.tx_busy_seen.clone(),
         stats: port.stats(),
         trace: uart.uart.trace.clone(),
         returned,
@@ -598,4 +600,30 @@ fn run_future_is_send() {
     let (mut u, mut d, mut p, mut t, mut h) = (U, D, NoParams, Tel, Rec::default());
     let fut = port.run(&mut u, &mut d, || 0, &mut p, &mut t, &mut h);
     assert_send(&fut);
+}
+
+/// `Stats::tx_busy_polls` counts exactly the idle-wait checks that found the transmitter busy,
+/// and the stats hook sees it rise during the wait: with the slowed fake transmitter (as above)
+/// the hook saw every value from 0 to the number of busy answers in the trace (more than 0), one
+/// step per busy check, and it stops there: the idle answers that ended each wait are not
+/// counted.
+#[test]
+fn run_counts_idle_wait_polls_that_found_the_transmitter_busy() {
+    let o = drive(Config::new().with_crsf_tx_interval_us(1_000), None, 4);
+    let busy = |b: bool| {
+        o.trace
+            .iter()
+            .filter(|e| matches!(e, UEv::Busy { busy, .. } if *busy == b))
+            .count()
+    };
+    assert!(busy(true) > 0, "the wait was not exercised");
+    assert_eq!(busy(false), 4, "one idle answer per baud change");
+    assert_eq!(o.stats.tx_busy_polls as usize, busy(true));
+    let mut seen = o.tx_busy_seen.clone();
+    seen.dedup();
+    assert_eq!(seen, (0..=o.stats.tx_busy_polls).collect::<Vec<u32>>());
+    assert_eq!(
+        o.last_stats_hook.map(|s| s.tx_busy_polls),
+        Some(o.stats.tx_busy_polls)
+    );
 }
