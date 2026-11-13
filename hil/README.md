@@ -150,3 +150,44 @@ Note the wall-clock order of the steps; the log's `t=` gives the rest.
 
 - Seen in the one run: the port followed 16 changes each way, so `RcPort::run` changed the baud on the real PL011 and `tx_busy` went false (`tx_busy_polls` 9); the banner read the pull-up true; 0 `uart_overrun` with the 256-byte RX ring in that run; the handset showed the battery frame (12.3 V, 0.0 A, 0 mAh, 50 %).
 - Not observed: the radio off in MAVLink mode through the port, an overload of the downlink and the stream slowdown, stick reports in MAVLink mode through the port, a message of an application's own dialect through `Hooks::mavlink`, any other receiver, radio or ExpressLRS version, flight. A long stall of the logger (defmt-rtt holds a critical section while it encodes each line) would show as `uart_overrun`; none came in 600 s.
+
+## `rc_link`: the three checks still open (radio off in MAVLink mode, own-dialect message each way, downlink overload)
+
+Status: **BUILT ONLY, never run.** `cargo build --release --bin rc_link` in this folder builds it. Nothing here has been seen on the board.
+
+A copy of `rc_follow` (same UART0 set-up, GPIO14 TX driven, GPIO17 RX with its pull-up turned on after the UART is built; the same interrupt executor and thread-mode logger; the same snapshot; the same banner; the same `[MODE]`, `[EDGE]`, `[STK]`, `[LNK]`, `[CNT]` and `[ERR]` lines; the same fixed CRSF battery frame with `RC_FOLLOW_BATT_DV` and `RC_FOLLOW_BATT_PCT`), with three additions. `rc_follow` is unchanged. It decides nothing: **the log is judged afterwards**. It never touches PIO0, PIO1, PIO2, GPIO36-39 (the ESCs), the ADC or DMA; the only pin driven is GPIO14 (UART0 TX).
+
+- **The test message** `MARV_TEST` (id 42420, CRC_EXTRA 100; `marv_dialect::marv::MARV_TEST_DATA` of marv-dialect `e49c15f`, a second, renamed dependency `marv-dialect-new`; `mavlink-device` and `rc-port` keep their older `61915e6`, and both use the one `mavlink-core` 0.21.0). Received: it is on the application's accept list, so the port hands it to `Hooks::mavlink` (only while locked on MAVLink, from the 3rd valid frame of the lock on); the hook decodes it and counts. Sent: one stream slot, `MARV_TEST { seq: n, time_ms: board ms, value: -n, tag: 1 }`, `n` from 0 and one more per frame handed to the node, 25 bytes on the wire.
+- **Load stream** (only with `RC_LINK_LOAD_HZ` above 0): ATTITUDE (id 30, 28-byte payload, 40 bytes on the wire), a counter from 1 in `time_boot_ms`, angles and rates 0 except `yawspeed` fixed at 0.001 rad/s, so that MAVLink 2 does not cut the trailing zeros and every frame is 40 bytes. The node adds its stream slowdown to both streams' intervals.
+- **`[CNT]`** also prints `stream_slowdown_ms` (the node's slowdown, now in `rc_port::Stats`), next to `tx_bytes_mav`.
+
+Build-time variables (decimal; above 1000 fails the build): `RC_LINK_TEST_HZ`, `MARV_TEST` frames per second, default 10 (0: no test stream); `RC_LINK_LOAD_HZ`, ATTITUDE frames per second, default 0 (no load slot at all). The banner prints the rates and the bytes per second they make before any slowdown (test 10 Hz: 250 B/s; load 100 Hz: 4000 B/s; HEARTBEAT 21 B/s). The documented downlink is about 1470 to 2375 bytes per second, so 100 Hz of load is about twice what the link carries.
+
+New line, once a second:
+
+`[TST] t=… sent=+10/1234 load_sent=+0/0 recv=+10/987 last_seq=986 tag=2 from=255/190 value=-986 time_ms=123456 lost=3 restarts=1 decode_failures=0`
+
+`sent` and `load_sent`: `MARV_TEST` and ATTITUDE frames handed to the node this second / in all (a frame handed over just before a baud change can still be dropped by it). `recv`: `MARV_TEST` frames decoded this second / in all; then the latest one's `seq`, `tag` (2 = ground station), sender (system/component), `value` and `time_ms`; `lost` is the sum of `seq - previous - 1` over the frames whose `seq` was more than the previous + 1; `restarts` counts frames whose `seq` was not more than the previous (reordered, repeated or the sender restarted); `decode_failures` counts hand-overs that did not decode. Before the first: `[TST] t=… sent=… load_sent=… recv=+0/0 none yet decode_failures=…`.
+
+### Run
+
+From the crate root (`rc-port/`), as for `rc_follow` (wiring the same):
+
+```sh
+tools/run.sh rc_link 600                      # checks 1 and 2 (test 10 Hz, no load)
+RC_LINK_LOAD_HZ=100 tools/run.sh rc_link 300  # check 3, overloaded
+tools/run.sh rc_link 300                      # check 3, recovery: a second build with load 0
+```
+
+Read the log with `grep -E '\[(MODE|EDGE|STK|LNK|CNT|TST|ERR)\]' hil/logs/rc_link-<date>.log`.
+
+### The three checks, and what to read
+
+- **(1) Radio off in MAVLink mode, through the port.** Locked on MAVLink (`[MODE] -> Mavlink`), the ground station receiving. Radio off for 10 s or more, then on. Expected: NO `[MODE]` line (the mode stays Mavlink); `[LNK] radio_status` continues about 91 a second with `rssi=0`; `[TST]` `recv=+0/…` (the receive count stops) while `sent` goes on; no baud change (`mode_changes` unchanged, no `[MODE] -> Searching`). Radio on: `recv` counts again; `lost` rises by about the frames sent meanwhile, or `restarts` by one if the ground station restarted its count.
+- **(2) `MARV_TEST` each way through the radio.** The ground-station tool sends `MARV_TEST` with `tag` 2 and counts what it receives (`tag` 1). Each way 100 frames or more: compare `[TST]` `recv` with what the tool sent, and the tool's received count with `[TST]` `sent`; at least 95 % intact each way, `decode_failures` 0, `from=` the ground station's system/component as the radio passes it, `value` and `seq` as the tool sent them.
+- **(3) Downlink overloaded** (`RC_LINK_LOAD_HZ=100`). Expected: `[LNK] radio_status` `txbuf` falls (below 50, then below 20); `[CNT]` `stream_slowdown_ms` rises (by 20 or 60 per RADIO_STATUS, up to 2000 and a little over); `[CNT]` `tx_bytes_mav` per second and `[TST]` `sent` and `load_sent` per second fall toward what the link carries; recovery when the load is removed (the second build with load 0): `txbuf` back above 90, `stream_slowdown_ms` falling to 0, `tx_bytes_mav` back to about 271 a second (250 + 21). Note that a baud change (any leave of the MAVLink lock) also sets the slowdown to 0.
+
+### Not verified (needs the board)
+
+- Everything above: never run. Whether the receiver passes id 42420 at all each way; the receiver's real downlink rate; how its `txbuf` behaves under load; whether the ground-station tool and this program agree on `MARV_TEST` (same CRC_EXTRA 100 and field order, by the dialect's definition only).
+- The stream slowdown on the board: the node's rule is ArduPilot's, tested on the host only.
