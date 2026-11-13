@@ -1336,3 +1336,261 @@ fn uart_error_burst_counted_no_report_no_mode_change_before_t_leave() {
         (1, 1, 1, 1)
     );
 }
+
+/// Carries out every pending action at `now_us` (writes taken whole, waits and baud changes done
+/// at once); returns the last baud set.
+fn settle(port: &mut RcPort<'_>, now_us: u64, rec: &mut Rec) -> Option<u32> {
+    let mut baud = None;
+    while let Some(a) = port.poll_action(now_us, &NoParams, &mut Tel, rec) {
+        match a {
+            Action::Write(b) => {
+                let n = b.len();
+                port.written(n);
+            }
+            Action::SetBaud(b) => {
+                baud = Some(b);
+                port.done(now_us);
+            }
+            _ => port.done(now_us),
+        }
+    }
+    baud
+}
+
+/// A port listening at the CRSF baud (`crsf`) or at 460800 from the returned time on.
+fn port_listening<'a>(
+    slots: &'a mut [mavlink_device::StreamSlot],
+    crsf: bool,
+    rec: &mut Rec,
+) -> (RcPort<'a>, u64) {
+    let config = if crsf {
+        Config::new().with_d_mav_us(1)
+    } else {
+        Config::new()
+    };
+    let mut port = RcPort::new(config, mavlink_device::Config::new(OWN_SYS, 1), slots);
+    assert_eq!(settle(&mut port, 0, rec), Some(MAVLINK_BAUD));
+    if !crsf {
+        return (port, 0);
+    }
+    assert_eq!(settle(&mut port, 1, rec), Some(CRSF_BAUD));
+    (port, 1)
+}
+
+/// A valid stick frame: CRSF RC or a MAVLink RC_CHANNELS_OVERRIDE for this system.
+fn stick_frame(crsf: bool, seq: u8) -> Vec<u8> {
+    if crsf {
+        crsf_rc(&CRSF_RAW)
+    } else {
+        mav(ELRS_SYS, ELRS_COMP, seq, &overrides(OWN_SYS, &MAV_CH))
+    }
+}
+
+/// `receive` applies the deadline due at its `now_us` before it looks at its bytes, so a caller
+/// that hands frames over late can neither keep a lock nor finish a lock-on with them. (i) Locked:
+/// a valid stick frame in a `receive` at the leave deadline (last valid frame + T_LEAVE) is not
+/// reported, the lock is left at that deadline and the frame's bytes are garbage. (ii)
+/// Listening: a third valid frame in a `receive` at the end of the listening period does not
+/// lock. Both protocols.
+#[test]
+fn late_receive_applies_the_deadline_before_the_bytes() {
+    for crsf in [false, true] {
+        let (locked, t_leave, dwell) = if crsf {
+            (Mode::Crsf, u64::from(T_LEAVE_CRSF_US), u64::from(D_CRSF_US))
+        } else {
+            (
+                Mode::Mavlink,
+                u64::from(T_LEAVE_MAV_US),
+                u64::from(D_MAV_US),
+            )
+        };
+
+        // (i) Locked.
+        let mut sl = slots();
+        let mut rec = Rec::default();
+        let (mut port, t0) = port_listening(&mut sl, crsf, &mut rec);
+        let mut last = t0;
+        for k in 1..=4u8 {
+            last = t0 + u64::from(k) * 1_000;
+            port.receive(&stick_frame(crsf, k), last, &mut NoParams, &mut rec);
+        }
+        let before = port.stats();
+        assert_eq!((before.mode, before.sticks), (locked, 2), "crsf {crsf}");
+        let frame = stick_frame(crsf, 5);
+        port.receive(&frame, last + t_leave, &mut NoParams, &mut rec);
+        let after = port.stats();
+        assert_eq!(
+            after.mode,
+            Mode::Searching,
+            "crsf {crsf}: a late frame kept the lock"
+        );
+        assert_eq!(after.mode_since_us, last + t_leave, "crsf {crsf}");
+        assert_eq!(
+            (after.sticks, rec.reports.len()),
+            (2, 2),
+            "crsf {crsf}: a late frame was reported"
+        );
+        assert_eq!(
+            after.garbage_bytes,
+            before.garbage_bytes + frame.len() as u32,
+            "crsf {crsf}"
+        );
+
+        // (ii) Listening.
+        let mut sl = slots();
+        let mut rec = Rec::default();
+        let (mut port, t0) = port_listening(&mut sl, crsf, &mut rec);
+        for k in 1..=2u8 {
+            let t = t0 + u64::from(k) * 1_000;
+            port.receive(&stick_frame(crsf, k), t, &mut NoParams, &mut rec);
+        }
+        let before = port.stats();
+        assert_eq!(before.lock_discarded, 2, "crsf {crsf}");
+        let frame = stick_frame(crsf, 3);
+        port.receive(&frame, t0 + dwell, &mut NoParams, &mut rec);
+        let after = port.stats();
+        assert_eq!(
+            (after.mode, after.sticks, after.lock_discarded),
+            (Mode::Searching, 0, 2),
+            "crsf {crsf}: a frame after the listening period locked"
+        );
+        assert!(rec.reports.is_empty(), "crsf {crsf}");
+        assert_eq!(
+            after.garbage_bytes,
+            before.garbage_bytes + frame.len() as u32,
+            "crsf {crsf}"
+        );
+    }
+}
+
+/// The length of the whole frame of the given protocol at the start of `bytes`, if there is one:
+/// CRSF (address 0xC8, length byte 2 to 62) or MAVLink 2 (0xFD, incompatibility flags 0, not
+/// signed).
+fn whole_frame_len(crsf: bool, bytes: &[u8]) -> Option<usize> {
+    let n = if crsf {
+        let len = usize::from(*bytes.get(1)?);
+        (bytes[0] == 0xC8 && (2..=62).contains(&len)).then_some(len + 2)?
+    } else {
+        (bytes[0] == 0xFD && *bytes.get(2)? == 0).then_some(usize::from(bytes[1]) + 12)?
+    };
+    (n <= bytes.len()).then_some(n)
+}
+
+/// When a lock is left with a frame written only in part, its unsent rest is dropped: the port
+/// locked on protocol A has written 2 bytes of a frame (`written(2)`) when its caller stalls past
+/// the leave deadline (as `run` would behind a slow write); the lock is left, and after the baud
+/// change to B and the lock on B, the fake UART's trace shows nothing written before the baud
+/// change, and every byte written after it, from the first write on, in whole frames of B (the
+/// first write is one whole frame). A to B is CRSF to MAVLink and MAVLink to CRSF.
+#[test]
+fn unsent_rest_of_a_frame_dropped_when_the_lock_is_left() {
+    for crsf_first in [true, false] {
+        let mut scen = Scen::default();
+        let (old_end, end) = if crsf_first {
+            let old_end = scen.crsf_stream(MS, 400 * MS, 4_000, &CRSF_RAW);
+            (
+                old_end,
+                scen.mav_stream(old_end + 50 * MS, 2_500 * MS, Some(&MAV_CH)),
+            )
+        } else {
+            let old_end = scen.mav_stream(MS, 400 * MS, Some(&MAV_CH));
+            (
+                old_end,
+                scen.crsf_stream(old_end + 50 * MS, 1_500 * MS, 4_000, &CRSF_RAW),
+            )
+        };
+        let (old_mode, new_mode, new_baud, t_leave) = if crsf_first {
+            (
+                Mode::Crsf,
+                Mode::Mavlink,
+                MAVLINK_BAUD,
+                u64::from(T_LEAVE_CRSF_US),
+            )
+        } else {
+            (
+                Mode::Mavlink,
+                Mode::Crsf,
+                CRSF_BAUD,
+                u64::from(T_LEAVE_MAV_US),
+            )
+        };
+        with_sim(Config::new(), scen.wire, |sim| {
+            sim.run_until(old_end / US + 1);
+            let s = sim.port.stats();
+            assert_eq!(s.mode, old_mode);
+            let last_valid = [
+                s.last_sticks_us,
+                s.last_crsf_link_us,
+                s.last_radio_status_us,
+            ]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap();
+            let leave = last_valid + t_leave;
+            // The next write of A, before the lock is left; the UART takes 2 of its bytes.
+            let frame = loop {
+                let now = sim.now_us();
+                assert!(now < leave, "no write before the leave deadline");
+                if let Some(Action::Write(b)) =
+                    sim.port
+                        .poll_action(now, &sim.params, &mut sim.tel, &mut sim.hooks)
+                {
+                    break b.to_vec();
+                }
+                sim.t += 100 * US;
+            };
+            assert_eq!(whole_frame_len(crsf_first, &frame), Some(frame.len()));
+            sim.tx.write(sim.t, 2);
+            sim.port.written(2);
+            sim.trace.push(Ev::Write {
+                t_us: sim.now_us(),
+                bytes: frame[..2].to_vec(),
+                mode: old_mode,
+                baud: sim.baud,
+            });
+            let partial = sim.trace.len();
+            // The caller stalls past the leave deadline.
+            sim.t = (leave + 1) * US;
+            sim.run_until(end / US + 10_000);
+            assert_eq!(sim.port.stats().mode, new_mode, "crsf_first {crsf_first}");
+            let after = &sim.trace[partial..];
+            let set = after
+                .iter()
+                .position(|e| matches!(e, Ev::SetBaud { .. }))
+                .unwrap();
+            assert!(matches!(after[0], Ev::Flush { .. }), "{:?}", after[0]);
+            assert!(
+                matches!(after[set], Ev::SetBaud { baud, .. } if baud == new_baud),
+                "{:?}",
+                after[set]
+            );
+            let writes: Vec<&Vec<u8>> = after[set..]
+                .iter()
+                .filter_map(|e| match e {
+                    Ev::Write { bytes, baud, .. } => {
+                        assert_eq!(*baud, new_baud);
+                        Some(bytes)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(!writes.is_empty(), "nothing written after the lock on B");
+            assert_eq!(
+                whole_frame_len(!crsf_first, writes[0]),
+                Some(writes[0].len()),
+                "crsf_first {crsf_first}: the first write after the baud change is not one whole frame of B: {:?} (rest of A: {:?})",
+                writes[0],
+                &frame[2..]
+            );
+            let all: Vec<u8> = writes.iter().flat_map(|w| w.iter().copied()).collect();
+            let mut rest = &all[..];
+            while !rest.is_empty() {
+                let n = whole_frame_len(!crsf_first, rest).unwrap_or_else(|| {
+                    panic!("crsf_first {crsf_first}: bytes not in whole frames of B: {rest:?}")
+                });
+                rest = &rest[n..];
+            }
+        });
+    }
+}
