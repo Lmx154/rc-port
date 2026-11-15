@@ -221,6 +221,7 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 [[package]]
 name = "crsf-codec"
 version = "0.1.0"
+source = "git+https://github.com/Lmx154/crsf-codec.git?rev=61a087889395e5c63bb73f80d2dde678f22f95a7#61a087889395e5c63bb73f80d2dde678f22f95a7"
 
 [[package]]
 name = "crunchy"
@@ -894,6 +895,7 @@ dependencies = [
 [[package]]
 name = "mavlink-device"
 version = "0.1.0"
+source = "git+https://github.com/Lmx154/mavlink-device.git?rev=dfdb11a03ac3c8a28792c4f23ee3cd6ca045a93c#dfdb11a03ac3c8a28792c4f23ee3cd6ca045a93c"
 dependencies = [
  "embedded-hal-async",
  "embedded-io-async 0.7.0",
