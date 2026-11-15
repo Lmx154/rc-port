@@ -836,7 +836,7 @@ dependencies = [
 [[package]]
 name = "marv-dialect"
 version = "0.1.0"
-source = "git+https://github.com/Lmx154/marv-dialect.git?rev=61915e658105a5bb88ff239c560cd923f66a56f7#61915e658105a5bb88ff239c560cd923f66a56f7"
+source = "git+https://github.com/Lmx154/marv-dialect.git?rev=af6baa107046219dee49cd88c81f9809c134e761#af6baa107046219dee49cd88c81f9809c134e761"
 dependencies = [
  "bitflags 2.13.2",
  "mavlink-bindgen",
@@ -897,7 +897,7 @@ version = "0.1.0"
 dependencies = [
  "embedded-hal-async",
  "embedded-io-async 0.7.0",
- "marv-dialect 0.1.0 (git+https://github.com/Lmx154/marv-dialect.git?rev=61915e658105a5bb88ff239c560cd923f66a56f7)",
+ "marv-dialect 0.1.0 (git+https://github.com/Lmx154/marv-dialect.git?rev=af6baa107046219dee49cd88c81f9809c134e761)",
 ]
 
 [[package]]
@@ -1201,7 +1201,7 @@ dependencies = [
  "embassy-rp",
  "embedded-hal-async",
  "embedded-io-async 0.7.0",
- "marv-dialect 0.1.0 (git+https://github.com/Lmx154/marv-dialect.git?rev=61915e658105a5bb88ff239c560cd923f66a56f7)",
+ "marv-dialect 0.1.0 (git+https://github.com/Lmx154/marv-dialect.git?rev=af6baa107046219dee49cd88c81f9809c134e761)",
  "mavlink-device",
 ]
 
@@ -1219,7 +1219,7 @@ dependencies = [
  "embassy-rp",
  "embassy-time",
  "embedded-io-async 0.7.0",
- "marv-dialect 0.1.0 (git+https://github.com/Lmx154/marv-dialect.git?rev=61915e658105a5bb88ff239c560cd923f66a56f7)",
+ "marv-dialect 0.1.0 (git+https://github.com/Lmx154/marv-dialect.git?rev=af6baa107046219dee49cd88c81f9809c134e761)",
  "marv-dialect 0.1.0 (git+https://github.com/Lmx154/marv-dialect.git?rev=e49c15f44a8e0e74dbf0da71ea9724049bb5845b)",
  "mavlink-device",
  "panic-probe",
