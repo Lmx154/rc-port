@@ -22,7 +22,7 @@ crsf-codec = { path = "../crsf-codec" }
 # commit like marv-dialect below.
 mavlink-device = { path = "../mavlink-device" }
 # The same source and commit as mavlink-device's own dependency, so that both use one copy.
-marv-dialect = { git = "https://github.com/Lmx154/marv-dialect.git", rev = "61915e658105a5bb88ff239c560cd923f66a56f7" }
+marv-dialect = { git = "https://github.com/Lmx154/marv-dialect.git", rev = "af6baa107046219dee49cd88c81f9809c134e761" }
 embedded-io-async = "0.7"
 embedded-hal-async = "1.0"
 embassy-rp = { version = "0.10.0", default-features = false, optional = true }
