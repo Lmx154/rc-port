@@ -19,7 +19,7 @@ embassy-rp-0-10 = ["dep:embassy-rp"]
 # that pins the same commits gets one copy of each. To take a newer one: change `rev` here and in
 # hil/Cargo.toml, then `cargo update -p <crate>`. To work on a sibling locally, override it without editing
 # this file: [patch."https://github.com/Lmx154/mavlink-device.git"] mavlink-device = { path = "../mavlink-device" }
-crsf-codec = { git = "https://github.com/Lmx154/crsf-codec.git", rev = "61a087889395e5c63bb73f80d2dde678f22f95a7" }
+crsf-codec = { git = "https://github.com/Lmx154/crsf-codec.git", rev = "2d12a55246ba1b0729c65004c6012015760da1d2" }
 mavlink-device = { git = "https://github.com/Lmx154/mavlink-device.git", rev = "dfdb11a03ac3c8a28792c4f23ee3cd6ca045a93c" }
 # The same source and commit as mavlink-device's own dependency, so that both use one copy.
 marv-dialect = { git = "https://github.com/Lmx154/marv-dialect.git", rev = "af6baa107046219dee49cd88c81f9809c134e761" }

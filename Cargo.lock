@@ -265,7 +265,7 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 [[package]]
 name = "crsf-codec"
 version = "0.1.0"
-source = "git+https://github.com/Lmx154/crsf-codec.git?rev=61a087889395e5c63bb73f80d2dde678f22f95a7#61a087889395e5c63bb73f80d2dde678f22f95a7"
+source = "git+https://github.com/Lmx154/crsf-codec.git?rev=2d12a55246ba1b0729c65004c6012015760da1d2#2d12a55246ba1b0729c65004c6012015760da1d2"
 
 [[package]]
 name = "crunchy"
