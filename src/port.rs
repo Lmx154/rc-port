@@ -144,6 +144,10 @@ pub struct Stats {
     /// `last_radio_status_us`. Heard at the MAVLink baud, locked or listening (the node acts on
     /// HEARTBEAT in both); kept across baud changes, which clear the node's own value.
     pub last_gcs_heartbeat_us: Option<u64>,
+    /// `(system_id, component_id)` that sent the HEARTBEAT stamped in `last_gcs_heartbeat_us`, set
+    /// together with it from the node's record of the same heartbeat; kept across baud changes like it.
+    /// Any sender of a HEARTBEAT of type GCS counts, so the application checks it.
+    pub last_gcs_heartbeat_sender: Option<(u8, u8)>,
     /// Valid frames counted but not reported because they came before the lock (frames 1 and 2 of
     /// each lock attempt).
     pub lock_discarded: u32,
@@ -583,8 +587,9 @@ impl<'a> RcPort<'a> {
                         fsm.on_mavlink(&m, hooks);
                         open.set(fsm.locked_on(Proto::Mavlink));
                     });
-                if let Some(t) = self.node.gcs_seen_us() {
+                if let (Some(t), Some(p)) = (self.node.gcs_seen_us(), self.node.stats().last_gcs) {
                     fsm.stats.last_gcs_heartbeat_us = Some(t);
+                    fsm.stats.last_gcs_heartbeat_sender = Some((p.system_id, p.component_id));
                 }
             }
         }

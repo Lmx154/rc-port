@@ -332,4 +332,46 @@ fn stats_last_gcs_heartbeat_us_is_the_receive_time_of_the_station_heartbeat_and_
     assert!(r.bauds.len() > 1, "a baud change happened");
     assert_eq!(r.port.node().gcs_seen_us(), None);
     assert_eq!(r.port.stats().last_gcs_heartbeat_us, Some(t));
+    assert_eq!(r.port.stats().last_gcs_heartbeat_sender, Some(GCS));
+}
+
+#[test]
+fn stats_last_gcs_heartbeat_sender_follows_the_heartbeat_that_set_the_time() {
+    use mavlink_device::dialect::MavType;
+    let mut r = rig();
+    assert_eq!(r.port.stats().last_gcs_heartbeat_sender, None);
+    r.feed_radio_status_x3();
+    r.pump();
+    r.now += 5_000;
+    r.receive(&heartbeat(ELRS, MavType::MAV_TYPE_GENERIC));
+    let s = r.port.stats();
+    assert_eq!((s.last_gcs_heartbeat_us, s.last_gcs_heartbeat_sender), (None, None));
+    r.now += 5_000;
+    let t1 = r.now;
+    r.receive(&heartbeat(GCS, MavType::MAV_TYPE_GCS));
+    let s = r.port.stats();
+    assert_eq!((s.last_gcs_heartbeat_us, s.last_gcs_heartbeat_sender), (Some(t1), Some(GCS)));
+    r.now += 5_000;
+    r.receive(&heartbeat((7, 9), MavType::MAV_TYPE_GENERIC));
+    let s = r.port.stats();
+    assert_eq!((s.last_gcs_heartbeat_us, s.last_gcs_heartbeat_sender), (Some(t1), Some(GCS)));
+    r.now += 5_000;
+    let t2 = r.now;
+    r.receive(&heartbeat(ELRS, MavType::MAV_TYPE_GCS));
+    let s = r.port.stats();
+    assert_eq!((s.last_gcs_heartbeat_us, s.last_gcs_heartbeat_sender), (Some(t2), Some(ELRS)));
+    r.now += 5_000;
+    let t3 = r.now;
+    r.receive(&heartbeat(GCS, MavType::MAV_TYPE_GCS));
+    let s = r.port.stats();
+    assert_eq!((s.last_gcs_heartbeat_us, s.last_gcs_heartbeat_sender), (Some(t3), Some(GCS)));
+    r.now += 5_000;
+    let t4 = r.now;
+    r.receive(&heartbeat(ELRS, MavType::MAV_TYPE_GCS));
+    for _ in 0..200 {
+        r.wait(10_000);
+    }
+    assert!(r.bauds.len() > 1, "a baud change happened");
+    let s = r.port.stats();
+    assert_eq!((s.last_gcs_heartbeat_us, s.last_gcs_heartbeat_sender), (Some(t4), Some(ELRS)));
 }
