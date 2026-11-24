@@ -294,3 +294,42 @@ fn i5_2_a_command_heard_before_the_lock_runs_only_if_the_port_locks_on_mavlink_b
         "the node does write (its heartbeat): the lock is real"
     );
 }
+
+fn heartbeat(sys_comp: (u8, u8), mavtype: mavlink_device::dialect::MavType) -> Vec<u8> {
+    mav(
+        sys_comp,
+        0,
+        &mavlink_device::dialect::HEARTBEAT_DATA {
+            mavtype,
+            mavlink_version: 3,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn stats_last_gcs_heartbeat_us_is_the_receive_time_of_the_station_heartbeat_and_survives_a_baud_change() {
+    use mavlink_device::dialect::MavType;
+    let mut r = rig();
+    assert_eq!(r.port.stats().last_gcs_heartbeat_us, None);
+    r.feed_radio_status_x3();
+    r.pump();
+    assert_eq!(r.port.stats().mode, Mode::Mavlink);
+    r.now += 5_000;
+    r.receive(&heartbeat(ELRS, MavType::MAV_TYPE_GENERIC));
+    assert_eq!(r.port.stats().last_gcs_heartbeat_us, None, "not a ground station");
+    r.now += 5_000;
+    let t = r.now;
+    r.receive(&heartbeat(GCS, MavType::MAV_TYPE_GCS));
+    let s = r.port.stats();
+    assert_eq!(s.last_gcs_heartbeat_us, Some(t), "the receive time");
+    assert!(s.last_radio_status_us.is_some_and(|rs| rs < t), "the clock RADIO_STATUS is stamped in");
+    assert_eq!(r.port.node().gcs_seen_us(), Some(t));
+    // Silence: the port leaves the lock and changes baud; the node forgets the station, the stat does not.
+    for _ in 0..200 {
+        r.wait(10_000);
+    }
+    assert!(r.bauds.len() > 1, "a baud change happened");
+    assert_eq!(r.port.node().gcs_seen_us(), None);
+    assert_eq!(r.port.stats().last_gcs_heartbeat_us, Some(t));
+}
