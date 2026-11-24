@@ -221,6 +221,11 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 [[package]]
 name = "crsf-codec"
 version = "0.1.0"
+source = "git+https://github.com/Lmx154/crsf-codec.git?rev=2d12a55246ba1b0729c65004c6012015760da1d2#2d12a55246ba1b0729c65004c6012015760da1d2"
+
+[[package]]
+name = "crsf-codec"
+version = "0.1.0"
 source = "git+https://github.com/Lmx154/crsf-codec.git?rev=61a087889395e5c63bb73f80d2dde678f22f95a7#61a087889395e5c63bb73f80d2dde678f22f95a7"
 
 [[package]]
@@ -895,7 +900,7 @@ dependencies = [
 [[package]]
 name = "mavlink-device"
 version = "0.1.0"
-source = "git+https://github.com/Lmx154/mavlink-device.git?rev=dfdb11a03ac3c8a28792c4f23ee3cd6ca045a93c#dfdb11a03ac3c8a28792c4f23ee3cd6ca045a93c"
+source = "git+https://github.com/Lmx154/mavlink-device.git?rev=d1ac8e615c40e172be5dcb2087eb6edffea0a777#d1ac8e615c40e172be5dcb2087eb6edffea0a777"
 dependencies = [
  "embedded-hal-async",
  "embedded-io-async 0.7.0",
@@ -1199,7 +1204,7 @@ checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 name = "rc-port"
 version = "0.1.0"
 dependencies = [
- "crsf-codec",
+ "crsf-codec 0.1.0 (git+https://github.com/Lmx154/crsf-codec.git?rev=2d12a55246ba1b0729c65004c6012015760da1d2)",
  "embassy-rp",
  "embedded-hal-async",
  "embedded-io-async 0.7.0",
@@ -1214,7 +1219,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
- "crsf-codec",
+ "crsf-codec 0.1.0 (git+https://github.com/Lmx154/crsf-codec.git?rev=61a087889395e5c63bb73f80d2dde678f22f95a7)",
  "defmt",
  "defmt-rtt",
  "embassy-executor",

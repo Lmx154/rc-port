@@ -20,7 +20,7 @@ embassy-rp-0-10 = ["dep:embassy-rp"]
 # hil/Cargo.toml, then `cargo update -p <crate>`. To work on a sibling locally, override it without editing
 # this file: [patch."https://github.com/Lmx154/mavlink-device.git"] mavlink-device = { path = "../mavlink-device" }
 crsf-codec = { git = "https://github.com/Lmx154/crsf-codec.git", rev = "2d12a55246ba1b0729c65004c6012015760da1d2" }
-mavlink-device = { git = "https://github.com/Lmx154/mavlink-device.git", rev = "dfdb11a03ac3c8a28792c4f23ee3cd6ca045a93c" }
+mavlink-device = { git = "https://github.com/Lmx154/mavlink-device.git", rev = "d1ac8e615c40e172be5dcb2087eb6edffea0a777" }
 # The same source and commit as mavlink-device's own dependency, so that both use one copy.
 marv-dialect = { git = "https://github.com/Lmx154/marv-dialect.git", rev = "af6baa107046219dee49cd88c81f9809c134e761" }
 embedded-io-async = "0.7"

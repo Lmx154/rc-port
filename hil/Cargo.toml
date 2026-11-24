@@ -14,7 +14,7 @@ name = "hil_common"
 # rc_follow runs rc-port itself, on the unsplit embassy-rp 0.10 BufferedUart.
 rc-port = { path = "..", features = ["embassy-rp-0-10"] }
 crsf-codec = { git = "https://github.com/Lmx154/crsf-codec.git", rev = "61a087889395e5c63bb73f80d2dde678f22f95a7" }
-mavlink-device = { git = "https://github.com/Lmx154/mavlink-device.git", rev = "dfdb11a03ac3c8a28792c4f23ee3cd6ca045a93c" }
+mavlink-device = { git = "https://github.com/Lmx154/mavlink-device.git", rev = "d1ac8e615c40e172be5dcb2087eb6edffea0a777" }
 # The same source and commit as mavlink-device's own dependency, so that both use one copy.
 marv-dialect = { git = "https://github.com/Lmx154/marv-dialect.git", rev = "af6baa107046219dee49cd88c81f9809c134e761" }
 # rc_link only, for marv::MARV_TEST_DATA (id 42420): the newer commit with the marv dialect, as a second,
