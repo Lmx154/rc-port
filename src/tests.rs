@@ -1077,21 +1077,34 @@ fn check_changes(c: &Changes, sim: &Sim<'_>, crsf_period_us: u64) -> Result<u64,
             }
         }
         let next_start = c.segs.get(k + 1).map_or(u64::MAX, |s| s.1);
-        let expected = if mav {
-            (
-                mav_us(),
-                Source::Mavlink {
-                    system_id: ELRS_SYS,
-                    component_id: ELRS_COMP,
-                },
-            )
-        } else {
-            (CRSF_RAW.map(raw_to_us), Source::Crsf)
+        let expected_of = |mav: bool| {
+            if mav {
+                (
+                    mav_us(),
+                    Source::Mavlink {
+                        system_id: ELRS_SYS,
+                        component_id: ELRS_COMP,
+                    },
+                )
+            } else {
+                (CRSF_RAW.map(raw_to_us), Source::Crsf)
+            }
         };
+        let expected = expected_of(mav);
+        // A report is handed over up to 2 w after its frame ended, so with no gap between the
+        // segments the last report of a segment lies in the next segment's time window and the
+        // next segment's first report in the overlap; the two protocols' values tell them apart.
         let reports: Vec<StickReport> = sim
             .sticks()
             .into_iter()
-            .filter(|r| r.at_us * US >= start && r.at_us * US < next_start)
+            .filter(|r| {
+                let t = r.at_us * US;
+                let value = (r.channels_us, r.source);
+                let late_own = t >= next_start && t <= end + 2 * w * US && value == expected;
+                let early_previous = t_last
+                    .is_some_and(|t_last| t <= t_last + 2 * w * US && value == expected_of(!mav));
+                ((t >= start && t < next_start) || late_own) && !early_previous
+            })
             .collect();
         for r in &reports {
             prop_assert_eq!((r.channels_us, r.source), expected);
@@ -1132,6 +1145,32 @@ fn mode_following_10_changes_each_way() {
         assert!(stats.sticks > 20 * 50);
         assert!(stats.lock_discarded >= 2 * 21);
     });
+}
+
+/// The minimal cases of an intermittent failure of the property below: CRSF into MAVLink and
+/// MAVLink into CRSF with no gap. The last stick report of the first segment is handed over
+/// after its frame ended (wake period 100 us), so it lies in the second segment's time window;
+/// the check must neither count it as a report of the second segment nor miss it in the first.
+#[test]
+fn changes_with_no_gap_attribute_the_last_report_of_a_segment_to_it() {
+    let crsf_period_us = 4_000;
+    for (first_mav, seg_ms) in [(false, 1_321), (true, 1_381)] {
+        let mut c = changes(first_mav, &[0], seg_ms, crsf_period_us);
+        let end_us = c.segs.last().unwrap().2 / US + 10_000;
+        let wire = std::mem::take(&mut c.scen.wire);
+        with_sim(Config::new(), wire, |sim| {
+            sim.step_us = 100;
+            sim.run_until(end_us);
+            let start = c.segs[1].1;
+            assert!(
+                sim.sticks().iter().any(|r| {
+                    r.at_us * US >= start && matches!(r.source, Source::Mavlink { .. }) == first_mav
+                }),
+                "the case no longer has a report of the first segment in the second's window"
+            );
+            check_changes(&c, sim, crsf_period_us).unwrap();
+        });
+    }
 }
 
 proptest! {
